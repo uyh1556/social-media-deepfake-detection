@@ -1,0 +1,54 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.env
+.env.*
+
+# Private research notes and unpublished artifacts
+AGENTS.md
+RESEARCH_CONTEXT.md
+analysis/
+data/
+dataset_split/
+docs/
+extract_state/
+instagram_pipeline/
+
+# Raw datasets
+ffpp_data/
+source_images_raw/
+data/df40/**/frames/
+data/df40/**/landmarks/
+data/df40/**/masks/
+instagram_probe/
+instagram_pipeline/**/upload/
+instagram_pipeline/**/download/
+instagram_pipeline/**/export/
+instagram_pipeline/proxy_*/images/
+
+# Local Instagram credentials and profile caches
+.instaloader/
+session-*
+
+# Dataset-derived visualizations (retain locally, never publish)
+analysis/**/visuals/
+instagram_pipeline/**/analysis/preprocessing_visuals/
+
+# Generated split symlinks
+dataset_split/source_aware/train/
+dataset_split/source_aware/val/
+dataset_split/source_aware/test/
+
+# Models and experiment outputs
+checkpoints/
+runs/
+outputs/
+results/
+wandb/
+*.pt
+*.pth
+*.ckpt
