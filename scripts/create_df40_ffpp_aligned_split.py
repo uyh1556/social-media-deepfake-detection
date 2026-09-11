@@ -309,6 +309,7 @@ def main():
         "df40_root": str(df40_root),
         "ffpp_anchor_manifest": str(ffpp_manifest),
         "ffpp_anchor_manifest_sha256": sha256_file(ffpp_manifest),
+        "source_manifest_sha256": sha256_file(ffpp_manifest),
         "storage": "manifest_only_source_files_unchanged",
         "split_policy": (
             "Every mapped DF40 FF++ source ID retains its existing FF++ "
