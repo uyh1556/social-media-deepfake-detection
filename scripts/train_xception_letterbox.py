@@ -57,6 +57,11 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--resume", type=Path, default=None)
     parser.add_argument("--unweighted-loss", action="store_true")
+    parser.add_argument(
+        "--experiment-family",
+        default="xception_preprocessing_ablation_v1",
+    )
+    parser.add_argument("--condition-name", default=None)
     return parser.parse_args()
 
 
@@ -148,7 +153,8 @@ def main():
         "manifest": str(args.manifest),
         "output_dir": str(args.output_dir),
         "resume": str(args.resume) if args.resume else None,
-        "experiment_family": "xception_preprocessing_ablation_v1",
+        "experiment_family": args.experiment_family,
+        "condition_name": args.condition_name,
         "preprocessing_name": LETTERBOX_NAME,
         "preprocessing": {
             "policy": "preserve full frame and aspect ratio",
@@ -213,6 +219,12 @@ def main():
             "epochs_without_improvement", 0
         )
         start_epoch = checkpoint["epoch"] + 1
+        if epochs_without_improvement >= args.patience:
+            print(
+                "Run already reached early stopping at epoch "
+                f"{checkpoint['epoch']}; nothing to resume."
+            )
+            return
 
     print(json.dumps(json_ready(config), ensure_ascii=False, indent=2))
     print("Train distribution:", Counter(train_frame["label"]))

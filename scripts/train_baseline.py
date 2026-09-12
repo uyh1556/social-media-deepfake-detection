@@ -4,7 +4,7 @@ import hashlib
 import json
 import platform
 import random
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -192,10 +192,23 @@ def load_and_validate_manifest(manifest_path, data_root):
         .gt(1)
         .sum()
     )
-    if group_leakage or video_leakage:
+    source_splits = defaultdict(set)
+    driver_splits = defaultdict(set)
+    for row in manifest.itertuples(index=False):
+        for source_id in str(row.source_ids).replace(",", "|").split("|"):
+            source_id = source_id.strip()
+            if source_id:
+                source_splits[source_id].add(row.split)
+        driver_id = getattr(row, "driver_id", "")
+        if pd.notna(driver_id) and str(driver_id).strip():
+            driver_splits[str(driver_id).strip()].add(row.split)
+    source_leakage = sum(len(splits) > 1 for splits in source_splits.values())
+    driver_leakage = sum(len(splits) > 1 for splits in driver_splits.values())
+    if group_leakage or video_leakage or source_leakage or driver_leakage:
         raise RuntimeError(
             "Split leakage detected: "
-            f"groups={group_leakage}, videos={video_leakage}"
+            f"groups={group_leakage}, videos={video_leakage}, "
+            f"sources={source_leakage}, drivers={driver_leakage}"
         )
 
     missing_paths = []
@@ -310,7 +323,14 @@ def manipulation_metrics(labels, predictions, probabilities, methods):
     probabilities_array = np.asarray(probabilities)
     methods_array = np.asarray(methods)
 
-    for fake_method in ("Deepfakes", "Face2Face"):
+    fake_methods = sorted(
+        {
+            method
+            for method, label in zip(methods_array, labels_array)
+            if label == LABEL_MAP["fake"]
+        }
+    )
+    for fake_method in fake_methods:
         mask = np.isin(methods_array, ["original", fake_method])
         subset_labels = labels_array[mask]
         if len(np.unique(subset_labels)) < 2:
