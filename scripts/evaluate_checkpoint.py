@@ -100,7 +100,16 @@ class EvaluationDataset(Dataset):
 
 
 @torch.no_grad()
-def evaluate_with_predictions(model, loader, frame, criterion, device):
+def evaluate_with_predictions(
+    model,
+    loader,
+    frame,
+    criterion,
+    device,
+    *,
+    progress_desc="Evaluate",
+    persistent_progress=False,
+):
     model.eval()
     use_amp = device.type == "cuda"
     total_loss = 0.0
@@ -109,7 +118,11 @@ def evaluate_with_predictions(model, loader, frame, criterion, device):
     probabilities = []
     indices = []
 
-    for batch in tqdm(loader, desc="Evaluate", leave=False):
+    for batch in tqdm(
+        loader,
+        desc=progress_desc,
+        leave=persistent_progress,
+    ):
         images = batch["image"].to(device, non_blocking=True)
         batch_labels = batch["label"].to(device, non_blocking=True)
         with torch.autocast(
