@@ -62,6 +62,14 @@ def parse_args():
         default="xception_preprocessing_ablation_v1",
     )
     parser.add_argument("--condition-name", default=None)
+    parser.add_argument(
+        "--persistent-progress",
+        action="store_true",
+        help=(
+            "Keep the Train/Validation tqdm bars visible in notebook output. "
+            "Recommended for Colab."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -232,9 +240,21 @@ def main():
     for epoch in range(start_epoch, args.epochs + 1):
         print(f"\nEpoch {epoch}/{args.epochs}")
         train_metrics = train_one_epoch(
-            model, train_loader, criterion, optimizer, scaler, device
+            model,
+            train_loader,
+            criterion,
+            optimizer,
+            scaler,
+            device,
+            persistent_progress=args.persistent_progress,
         )
-        val_metrics = evaluate(model, val_loader, criterion, device)
+        val_metrics = evaluate(
+            model,
+            val_loader,
+            criterion,
+            device,
+            persistent_progress=args.persistent_progress,
+        )
         learning_rate = optimizer.param_groups[0]["lr"]
         epoch_result = {
             "epoch": epoch,

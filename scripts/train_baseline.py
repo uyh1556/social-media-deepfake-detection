@@ -343,14 +343,29 @@ def manipulation_metrics(labels, predictions, probabilities, methods):
     return results
 
 
-def train_one_epoch(model, loader, criterion, optimizer, scaler, device):
+def train_one_epoch(
+    model,
+    loader,
+    criterion,
+    optimizer,
+    scaler,
+    device,
+    *,
+    persistent_progress=False,
+):
     model.train()
     use_amp = device.type == "cuda"
     total_loss = 0.0
     total_correct = 0
     total_samples = 0
 
-    progress = tqdm(loader, desc="Train", leave=False)
+    progress = tqdm(
+        loader,
+        desc="Train",
+        leave=persistent_progress,
+        dynamic_ncols=True,
+        mininterval=0.5,
+    )
     for batch in progress:
         images = batch["image"].to(device, non_blocking=True)
         labels = batch["label"].to(device, non_blocking=True)
@@ -381,7 +396,14 @@ def train_one_epoch(model, loader, criterion, optimizer, scaler, device):
 
 
 @torch.no_grad()
-def evaluate(model, loader, criterion, device):
+def evaluate(
+    model,
+    loader,
+    criterion,
+    device,
+    *,
+    persistent_progress=False,
+):
     model.eval()
     use_amp = device.type == "cuda"
     total_loss = 0.0
@@ -391,7 +413,13 @@ def evaluate(model, loader, criterion, device):
     probabilities_all = []
     methods_all = []
 
-    progress = tqdm(loader, desc="Validation", leave=False)
+    progress = tqdm(
+        loader,
+        desc="Validation",
+        leave=persistent_progress,
+        dynamic_ncols=True,
+        mininterval=0.5,
+    )
     for batch in progress:
         images = batch["image"].to(device, non_blocking=True)
         labels = batch["label"].to(device, non_blocking=True)

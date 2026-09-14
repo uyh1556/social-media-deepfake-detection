@@ -1,0 +1,48 @@
+{
+  "protocol": "family_coverage_fixed_budget_v1",
+  "preprocessing": "xception_letterbox299",
+  "conditions": {
+    "M1": {
+      "name": "fs",
+      "families": ["FS"],
+      "seen_fake_methods": ["SimSwap", "BlendFace"],
+      "archive_modules": ["real_trainval", "df40_fs_trainval"]
+    },
+    "M2": {
+      "name": "fr",
+      "families": ["FR"],
+      "seen_fake_methods": ["Wav2Lip", "FOMM"],
+      "archive_modules": ["real_trainval", "df40_fr_trainval"]
+    },
+    "M3": {
+      "name": "efs",
+      "families": ["EFS"],
+      "seen_fake_methods": ["StyleGAN3", "DiT"],
+      "archive_modules": ["real_trainval", "df40_efs_trainval"]
+    },
+    "M4": {
+      "name": "fs_fr",
+      "families": ["FS", "FR"],
+      "seen_fake_methods": ["SimSwap", "BlendFace", "Wav2Lip", "FOMM"],
+      "archive_modules": ["real_trainval", "df40_fs_trainval", "df40_fr_trainval"]
+    },
+    "M5": {
+      "name": "fs_efs",
+      "families": ["FS", "EFS"],
+      "seen_fake_methods": ["SimSwap", "BlendFace", "StyleGAN3", "DiT"],
+      "archive_modules": ["real_trainval", "df40_fs_trainval", "df40_efs_trainval"]
+    },
+    "M6": {
+      "name": "fr_efs",
+      "families": ["FR", "EFS"],
+      "seen_fake_methods": ["Wav2Lip", "FOMM", "StyleGAN3", "DiT"],
+      "archive_modules": ["real_trainval", "df40_fr_trainval", "df40_efs_trainval"]
+    },
+    "M7": {
+      "name": "fs_fr_efs",
+      "families": ["FS", "FR", "EFS"],
+      "seen_fake_methods": ["SimSwap", "BlendFace", "Wav2Lip", "FOMM", "StyleGAN3", "DiT"],
+      "archive_modules": ["real_trainval", "df40_fs_trainval", "df40_fr_trainval", "df40_efs_trainval"]
+    }
+  }
+}
