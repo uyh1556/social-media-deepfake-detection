@@ -163,6 +163,7 @@ def load_and_validate_manifest(manifest_path, data_root):
             "source_ids": str,
             "source_path": str,
         },
+        keep_default_na=False,
     )
 
     missing_columns = REQUIRED_COLUMNS - set(manifest.columns)
