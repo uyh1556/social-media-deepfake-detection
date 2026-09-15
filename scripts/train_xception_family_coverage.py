@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and launch one M1-M7 family-coverage Xception run."""
+"""Validate and launch one M0-M7 family-coverage Xception run."""
 
 from __future__ import annotations
 
@@ -12,9 +12,19 @@ from pathlib import Path
 import pandas as pd
 
 
+FIXED_BUDGETS = {
+    "train": {"real": 19_800, "fake": 19_800},
+    "val": {"real": 4_680, "fake": 4_680},
+}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--condition", choices=[f"M{i}" for i in range(1, 8)], required=True)
+    parser.add_argument(
+        "--condition",
+        choices=[f"M{i}" for i in range(8)],
+        required=True,
+    )
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
@@ -37,6 +47,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_condition(path: Path, condition_id: str) -> tuple[dict, dict]:
+    if condition_id == "M0":
+        path = path.with_name("m0.json")
     if not path.is_file():
         raise FileNotFoundError(path)
     config = json.loads(path.read_text(encoding="utf-8"))
@@ -47,7 +59,11 @@ def load_condition(path: Path, condition_id: str) -> tuple[dict, dict]:
     return config, condition
 
 
-def validate_manifest(path: Path, expected_methods: list[str]) -> pd.DataFrame:
+def validate_manifest(
+    path: Path,
+    expected_methods: list[str],
+    expected_budgets: dict,
+) -> pd.DataFrame:
     if not path.is_file():
         raise FileNotFoundError(
             f"Frozen manifest is not ready: {path}. "
@@ -75,6 +91,19 @@ def validate_manifest(path: Path, expected_methods: list[str]) -> pd.DataFrame:
         )
 
     for split in ("train", "val"):
+        label_counts = development[development["split"] == split].groupby(
+            "label"
+        ).size()
+        expected_counts = expected_budgets[split]
+        actual_counts = {
+            label: int(label_counts.get(label, 0))
+            for label in ("real", "fake")
+        }
+        if actual_counts != expected_counts:
+            raise RuntimeError(
+                f"Fixed budget mismatch in {split}: "
+                f"expected={expected_counts}, actual={actual_counts}"
+            )
         counts = (
             development[
                 (development["split"] == split)
@@ -101,7 +130,9 @@ def main() -> None:
         args.conditions_config.resolve(), args.condition
     )
     manifest = validate_manifest(
-        args.manifest, condition["seen_fake_methods"]
+        args.manifest,
+        condition["seen_fake_methods"],
+        protocol.get("budgets", FIXED_BUDGETS),
     )
     missing_images = [
         value

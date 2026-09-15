@@ -1,0 +1,16 @@
+{
+  "protocol": "family_coverage_fixed_budget_v1",
+  "preprocessing": "xception_letterbox299",
+  "budgets": {
+    "train": {"real": 19800, "fake": 19800},
+    "val": {"real": 4680, "fake": 4680}
+  },
+  "conditions": {
+    "M0": {
+      "name": "ffpp",
+      "families": ["FFPP"],
+      "seen_fake_methods": ["Deepfakes", "Face2Face"],
+      "archive_modules": ["real_trainval", "ffpp_fake_trainval"]
+    }
+  }
+}
