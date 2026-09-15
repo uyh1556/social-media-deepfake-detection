@@ -1,3 +1,4 @@
+import io
 from pathlib import Path
 
 import timm
@@ -10,6 +11,7 @@ from torchvision.transforms import functional as functional
 STANDARD_NAME = "standard_center_crop_299"
 LETTERBOX_NAME = "full_frame_letterbox_299"
 FACE_ROI_NAME = "face_roi_mtcnn_1p5_299"
+CONTROLLED_REENCODE_NAME = "canonical256_jpegq95_letterbox299"
 LETTERBOX_FILL_RGB = (128, 128, 128)
 FACE_ROI_FILL_RGB = LETTERBOX_FILL_RGB
 FACE_ROI_REQUIRED_COLUMNS = {
@@ -65,6 +67,53 @@ class Letterbox:
         )
 
 
+class JpegRoundTrip:
+    """Apply one deterministic in-memory JPEG encode/decode round trip."""
+
+    def __init__(
+        self,
+        quality=95,
+        subsampling=2,
+        optimize=False,
+        progressive=False,
+    ):
+        quality = int(quality)
+        subsampling = int(subsampling)
+        if not 1 <= quality <= 100:
+            raise ValueError(f"JPEG quality must be 1-100, got {quality}")
+        if subsampling not in {0, 1, 2}:
+            raise ValueError(
+                f"JPEG subsampling must be 0, 1, or 2, got {subsampling}"
+            )
+        self.quality = quality
+        self.subsampling = subsampling
+        self.optimize = bool(optimize)
+        self.progressive = bool(progressive)
+
+    def __call__(self, image):
+        if not isinstance(image, Image.Image):
+            raise TypeError(f"Expected PIL image, got {type(image).__name__}")
+        buffer = io.BytesIO()
+        image.convert("RGB").save(
+            buffer,
+            format="JPEG",
+            quality=self.quality,
+            subsampling=self.subsampling,
+            optimize=self.optimize,
+            progressive=self.progressive,
+        )
+        buffer.seek(0)
+        with Image.open(buffer) as decoded:
+            return decoded.convert("RGB").copy()
+
+    def __repr__(self):
+        return (
+            f"JpegRoundTrip(quality={self.quality}, "
+            f"subsampling={self.subsampling}, optimize={self.optimize}, "
+            f"progressive={self.progressive})"
+        )
+
+
 def interpolation_mode(value):
     modes = {
         "bicubic": InterpolationMode.BICUBIC,
@@ -95,6 +144,80 @@ def letterbox_transforms(data_config):
                 mean=data_config["mean"], std=data_config["std"]
             ),
         ]
+    )
+    training = transforms.Compose(
+        [transforms.RandomHorizontalFlip(p=0.5), evaluation]
+    )
+    return training, evaluation
+
+
+def canonical_reencode_transform(
+    data_config,
+    *,
+    canonical_size=256,
+    jpeg_quality=95,
+    jpeg_subsampling=2,
+    jpeg_optimize=False,
+    jpeg_progressive=False,
+):
+    """Build the deterministic canonical-size/JPEG/model-input transform."""
+    channels, height, width = tuple(data_config["input_size"])
+    if channels != 3 or height != width:
+        raise ValueError(
+            "Controlled re-encoding requires square RGB model input, got "
+            f"{data_config['input_size']}"
+        )
+    canonical_size = int(canonical_size)
+    if canonical_size < 1:
+        raise ValueError("canonical_size must be positive")
+    steps = [
+        Letterbox(
+            size=canonical_size,
+            interpolation=interpolation_mode(data_config["interpolation"]),
+        )
+    ]
+    if jpeg_quality is not None:
+        steps.append(
+            JpegRoundTrip(
+                quality=jpeg_quality,
+                subsampling=jpeg_subsampling,
+                optimize=jpeg_optimize,
+                progressive=jpeg_progressive,
+            )
+        )
+    steps.extend(
+        [
+            Letterbox(
+                size=height,
+                interpolation=interpolation_mode(
+                    data_config["interpolation"]
+                ),
+            ),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=data_config["mean"], std=data_config["std"]
+            ),
+        ]
+    )
+    return transforms.Compose(steps)
+
+
+def canonical_reencode_transforms(
+    data_config,
+    *,
+    canonical_size=256,
+    jpeg_quality=95,
+    jpeg_subsampling=2,
+    jpeg_optimize=False,
+    jpeg_progressive=False,
+):
+    evaluation = canonical_reencode_transform(
+        data_config,
+        canonical_size=canonical_size,
+        jpeg_quality=jpeg_quality,
+        jpeg_subsampling=jpeg_subsampling,
+        jpeg_optimize=jpeg_optimize,
+        jpeg_progressive=jpeg_progressive,
     )
     training = transforms.Compose(
         [transforms.RandomHorizontalFlip(p=0.5), evaluation]
@@ -185,6 +308,17 @@ def evaluation_transform_from_checkpoint(checkpoint):
         return evaluation
     if name == FACE_ROI_NAME:
         _, evaluation = face_roi_transforms(data_config)
+        return evaluation
+    if name == CONTROLLED_REENCODE_NAME:
+        preprocessing = config.get("preprocessing", {})
+        _, evaluation = canonical_reencode_transforms(
+            data_config,
+            canonical_size=preprocessing["canonical_size"],
+            jpeg_quality=preprocessing["jpeg_quality"],
+            jpeg_subsampling=preprocessing["jpeg_subsampling"],
+            jpeg_optimize=preprocessing["jpeg_optimize"],
+            jpeg_progressive=preprocessing["jpeg_progressive"],
+        )
         return evaluation
     if name == STANDARD_NAME or "preprocessing_name" not in config:
         return timm.data.create_transform(

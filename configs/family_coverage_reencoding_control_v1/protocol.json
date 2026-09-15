@@ -1,0 +1,66 @@
+{
+  "protocol": "family_coverage_reencoding_control_v1",
+  "models": ["M5", "M7"],
+  "training_manifest_sampling_seed": 42,
+  "training_seeds": [42, 43, 44],
+  "manifest_sha256": {
+    "M5": "f59befef4fd22396eb0782f7b1cd17ba93b00b1ee126b2409b7f3b2bd96fdf8a",
+    "M7": "210461d98f9435c70369df5ee73ea0cd41d82949b520c2311586f2e1e9758a78"
+  },
+  "test_manifest_sha256": "b45746e8da221062819422c2a9e762e26c18686dc3700bec44fa4e05eeed0290",
+  "preprocessing": {
+    "name": "canonical256_jpegq95_letterbox299",
+    "source_decode": "Pillow decode followed by RGB conversion",
+    "train_only_augmentation": "random horizontal flip p=0.5",
+    "canonical_size": 256,
+    "canonical_resize": "aspect-preserving bicubic letterbox with antialiasing",
+    "canonical_padding_fill_rgb": [128, 128, 128],
+    "jpeg_quality": 95,
+    "jpeg_subsampling": 2,
+    "jpeg_optimize": false,
+    "jpeg_progressive": false,
+    "model_input_size": 299,
+    "normalization_mean": [0.5, 0.5, 0.5],
+    "normalization_std": [0.5, 0.5, 0.5]
+  },
+  "evaluation_conditions": [
+    {
+      "name": "native_original",
+      "canonical_size": null,
+      "jpeg_quality": null,
+      "primary": false
+    },
+    {
+      "name": "canonical_256_png",
+      "canonical_size": 256,
+      "jpeg_quality": null,
+      "primary": false
+    },
+    {
+      "name": "canonical_256_jpeg_q95",
+      "canonical_size": 256,
+      "jpeg_quality": 95,
+      "primary": true
+    },
+    {
+      "name": "canonical_256_jpeg_q90",
+      "canonical_size": 256,
+      "jpeg_quality": 90,
+      "primary": false
+    },
+    {
+      "name": "canonical_256_jpeg_q75",
+      "canonical_size": 256,
+      "jpeg_quality": 75,
+      "primary": false
+    }
+  ],
+  "reporting": {
+    "protected_unseen_macro_auc": "all six protected unseen methods",
+    "protected_unseen_excluding_pixart_macro_auc": "five protected unseen methods excluding PixArt-alpha",
+    "pixart_auc": "reported separately for native-resolution sensitivity",
+    "seed_summary": "mean and sample standard deviation across training seeds"
+  },
+  "source_images_modified": false,
+  "legacy_checkpoints_overwritten": false
+}

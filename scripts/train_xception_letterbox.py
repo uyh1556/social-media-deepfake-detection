@@ -6,9 +6,12 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import PIL
 import sklearn
 import timm
 import torch
+import torchvision
+from PIL import features
 from torch import nn
 from torch.utils.data import DataLoader
 
@@ -29,8 +32,10 @@ from train_baseline import (
     write_json,
 )
 from xception_preprocessing import (
+    CONTROLLED_REENCODE_NAME,
     LETTERBOX_FILL_RGB,
     LETTERBOX_NAME,
+    canonical_reencode_transforms,
     letterbox_transforms,
 )
 
@@ -70,13 +75,43 @@ def parse_args():
             "Recommended for Colab."
         ),
     )
+    parser.add_argument(
+        "--canonical-size",
+        type=int,
+        default=None,
+        help=(
+            "Enable the controlled re-encoding pipeline by first "
+            "letterboxing every image to this common size."
+        ),
+    )
+    parser.add_argument(
+        "--jpeg-quality",
+        type=int,
+        default=None,
+        help="Fixed JPEG quality for controlled in-memory re-encoding.",
+    )
+    parser.add_argument("--jpeg-subsampling", type=int, default=2)
+    parser.add_argument("--jpeg-optimize", action="store_true")
+    parser.add_argument("--jpeg-progressive", action="store_true")
     return parser.parse_args()
 
 
 def make_loaders(train_frame, val_frame, data_root, data_config, args):
-    training_transform, evaluation_transform = letterbox_transforms(
-        data_config
-    )
+    if args.canonical_size is None:
+        training_transform, evaluation_transform = letterbox_transforms(
+            data_config
+        )
+    else:
+        training_transform, evaluation_transform = (
+            canonical_reencode_transforms(
+                data_config,
+                canonical_size=args.canonical_size,
+                jpeg_quality=args.jpeg_quality,
+                jpeg_subsampling=args.jpeg_subsampling,
+                jpeg_optimize=args.jpeg_optimize,
+                jpeg_progressive=args.jpeg_progressive,
+            )
+        )
     train_dataset = FFPPDataset(
         train_frame, data_root, training_transform
     )
@@ -108,6 +143,18 @@ def main():
         args.resume = args.resume.resolve()
     if args.model not in {"xception", "legacy_xception"}:
         raise ValueError("This ablation is restricted to Xception.")
+    controlled_reencode = args.canonical_size is not None
+    if controlled_reencode != (args.jpeg_quality is not None):
+        raise ValueError(
+            "--canonical-size and --jpeg-quality must be provided together."
+        )
+    if controlled_reencode:
+        if args.canonical_size < 1:
+            raise ValueError("--canonical-size must be positive.")
+        if not 1 <= args.jpeg_quality <= 100:
+            raise ValueError("--jpeg-quality must be between 1 and 100.")
+        if args.jpeg_subsampling not in {0, 1, 2}:
+            raise ValueError("--jpeg-subsampling must be 0, 1, or 2.")
     if not args.manifest.is_file():
         raise FileNotFoundError(args.manifest)
     if not args.data_root.is_dir():
@@ -155,6 +202,41 @@ def main():
     )
     scaler = torch.amp.GradScaler("cuda", enabled=True)
 
+    preprocessing_name = (
+        CONTROLLED_REENCODE_NAME if controlled_reencode else LETTERBOX_NAME
+    )
+    if controlled_reencode:
+        preprocessing = {
+            "policy": (
+                "common aspect-preserving canonical canvas, fixed in-memory "
+                "JPEG round trip, then Xception letterbox"
+            ),
+            "canonical_size": int(args.canonical_size),
+            "canonical_resize": (
+                "fit long edge inside canonical size with bicubic "
+                "antialiasing"
+            ),
+            "canonical_padding": (
+                "symmetric constant padding to canonical square"
+            ),
+            "canonical_padding_fill_rgb": LETTERBOX_FILL_RGB,
+            "jpeg_quality": int(args.jpeg_quality),
+            "jpeg_subsampling": int(args.jpeg_subsampling),
+            "jpeg_optimize": bool(args.jpeg_optimize),
+            "jpeg_progressive": bool(args.jpeg_progressive),
+            "model_input_resize": (
+                "canonical image to 299x299 with bicubic antialiasing"
+            ),
+            "source_files_modified": False,
+        }
+    else:
+        preprocessing = {
+            "policy": "preserve full frame and aspect ratio",
+            "resize": "fit long edge inside 299 with bicubic antialiasing",
+            "padding": "symmetric constant padding to 299x299",
+            "padding_fill_rgb": LETTERBOX_FILL_RGB,
+            "distortion": "none",
+        }
     config = {
         **vars(args),
         "data_root": str(args.data_root),
@@ -163,14 +245,8 @@ def main():
         "resume": str(args.resume) if args.resume else None,
         "experiment_family": args.experiment_family,
         "condition_name": args.condition_name,
-        "preprocessing_name": LETTERBOX_NAME,
-        "preprocessing": {
-            "policy": "preserve full frame and aspect ratio",
-            "resize": "fit long edge inside 299 with bicubic antialiasing",
-            "padding": "symmetric constant padding to 299x299",
-            "padding_fill_rgb": LETTERBOX_FILL_RGB,
-            "distortion": "none",
-        },
+        "preprocessing_name": preprocessing_name,
+        "preprocessing": preprocessing,
         "manifest_sha256": sha256_file(args.manifest),
         "label_map": LABEL_MAP,
         "class_counts": {
@@ -196,7 +272,10 @@ def main():
         "versions": {
             "python": platform.python_version(),
             "torch": torch.__version__,
+            "torchvision": torchvision.__version__,
             "timm": timm.__version__,
+            "pillow": PIL.__version__,
+            "libjpeg": features.version_codec("jpg"),
             "pandas": pd.__version__,
             "numpy": np.__version__,
             "scikit_learn": sklearn.__version__,
@@ -214,8 +293,14 @@ def main():
         )
         if checkpoint["model_name"] != args.model:
             raise ValueError("Resume model does not match.")
-        if checkpoint["config"].get("preprocessing_name") != LETTERBOX_NAME:
-            raise ValueError("Resume checkpoint is not the letterbox experiment.")
+        if checkpoint["config"].get("preprocessing_name") != preprocessing_name:
+            raise ValueError(
+                "Resume checkpoint preprocessing does not match this run."
+            )
+        if checkpoint["config"].get("preprocessing") != preprocessing:
+            raise ValueError(
+                "Resume checkpoint preprocessing parameters do not match."
+            )
         if checkpoint["config"].get("manifest_sha256") != config["manifest_sha256"]:
             raise ValueError("Resume manifest does not match.")
         model.load_state_dict(checkpoint["model_state_dict"])
