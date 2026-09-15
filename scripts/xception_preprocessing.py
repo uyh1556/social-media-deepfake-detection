@@ -1,4 +1,5 @@
 import io
+import random
 from pathlib import Path
 
 import timm
@@ -12,6 +13,7 @@ STANDARD_NAME = "standard_center_crop_299"
 LETTERBOX_NAME = "full_frame_letterbox_299"
 FACE_ROI_NAME = "face_roi_mtcnn_1p5_299"
 CONTROLLED_REENCODE_NAME = "canonical256_jpegq95_letterbox299"
+MIXED_JPEG_REENCODE_NAME = "canonical256_jpegmixed_letterbox299"
 LETTERBOX_FILL_RGB = (128, 128, 128)
 FACE_ROI_FILL_RGB = LETTERBOX_FILL_RGB
 FACE_ROI_REQUIRED_COLUMNS = {
@@ -111,6 +113,51 @@ class JpegRoundTrip:
             f"JpegRoundTrip(quality={self.quality}, "
             f"subsampling={self.subsampling}, optimize={self.optimize}, "
             f"progressive={self.progressive})"
+        )
+
+
+class RandomJpegRoundTrip:
+    """Apply one JPEG round trip using a uniformly sampled quality."""
+
+    def __init__(
+        self,
+        qualities,
+        subsampling=2,
+        optimize=False,
+        progressive=False,
+    ):
+        self.qualities = tuple(int(value) for value in qualities)
+        if not self.qualities:
+            raise ValueError("At least one JPEG quality is required")
+        if len(set(self.qualities)) != len(self.qualities):
+            raise ValueError("JPEG quality choices must be unique")
+        if any(not 1 <= value <= 100 for value in self.qualities):
+            raise ValueError(
+                f"JPEG qualities must be 1-100, got {self.qualities}"
+            )
+        self.subsampling = int(subsampling)
+        if self.subsampling not in {0, 1, 2}:
+            raise ValueError(
+                "JPEG subsampling must be 0, 1, or 2, got "
+                f"{self.subsampling}"
+            )
+        self.optimize = bool(optimize)
+        self.progressive = bool(progressive)
+
+    def __call__(self, image):
+        quality = random.choice(self.qualities)
+        return JpegRoundTrip(
+            quality=quality,
+            subsampling=self.subsampling,
+            optimize=self.optimize,
+            progressive=self.progressive,
+        )(image)
+
+    def __repr__(self):
+        return (
+            f"RandomJpegRoundTrip(qualities={self.qualities}, "
+            f"subsampling={self.subsampling}, optimize={self.optimize}, "
+            f"progressive={self.progressive}, sampling=uniform)"
         )
 
 
@@ -225,6 +272,55 @@ def canonical_reencode_transforms(
     return training, evaluation
 
 
+def canonical_mixed_reencode_transforms(
+    data_config,
+    *,
+    canonical_size=256,
+    train_jpeg_qualities=(75, 80, 85, 90, 95),
+    validation_jpeg_quality=95,
+    jpeg_subsampling=2,
+    jpeg_optimize=False,
+    jpeg_progressive=False,
+):
+    """Build mixed-quality training and fixed-quality validation transforms."""
+    channels, height, width = tuple(data_config["input_size"])
+    if channels != 3 or height != width:
+        raise ValueError(
+            "Mixed JPEG re-encoding requires square RGB model input, got "
+            f"{data_config['input_size']}"
+        )
+    canonical_size = int(canonical_size)
+    if canonical_size < 1:
+        raise ValueError("canonical_size must be positive")
+    interpolation = interpolation_mode(data_config["interpolation"])
+    training = transforms.Compose(
+        [
+            transforms.RandomHorizontalFlip(p=0.5),
+            Letterbox(size=canonical_size, interpolation=interpolation),
+            RandomJpegRoundTrip(
+                qualities=train_jpeg_qualities,
+                subsampling=jpeg_subsampling,
+                optimize=jpeg_optimize,
+                progressive=jpeg_progressive,
+            ),
+            Letterbox(size=height, interpolation=interpolation),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=data_config["mean"], std=data_config["std"]
+            ),
+        ]
+    )
+    evaluation = canonical_reencode_transform(
+        data_config,
+        canonical_size=canonical_size,
+        jpeg_quality=validation_jpeg_quality,
+        jpeg_subsampling=jpeg_subsampling,
+        jpeg_optimize=jpeg_optimize,
+        jpeg_progressive=jpeg_progressive,
+    )
+    return training, evaluation
+
+
 def validate_face_roi_columns(frame):
     missing = FACE_ROI_REQUIRED_COLUMNS - set(frame.columns)
     if missing:
@@ -320,6 +416,16 @@ def evaluation_transform_from_checkpoint(checkpoint):
             jpeg_progressive=preprocessing["jpeg_progressive"],
         )
         return evaluation
+    if name == MIXED_JPEG_REENCODE_NAME:
+        preprocessing = config.get("preprocessing", {})
+        return canonical_reencode_transform(
+            data_config,
+            canonical_size=preprocessing["canonical_size"],
+            jpeg_quality=preprocessing["validation_jpeg_quality"],
+            jpeg_subsampling=preprocessing["jpeg_subsampling"],
+            jpeg_optimize=preprocessing["jpeg_optimize"],
+            jpeg_progressive=preprocessing["jpeg_progressive"],
+        )
     if name == STANDARD_NAME or "preprocessing_name" not in config:
         return timm.data.create_transform(
             **data_config, is_training=False

@@ -43,12 +43,15 @@ from train_baseline import LABEL_MAP, sha256_file, write_json
 from xception_preprocessing import (
     CONTROLLED_REENCODE_NAME,
     LETTERBOX_NAME,
+    MIXED_JPEG_REENCODE_NAME,
     canonical_reencode_transform,
     letterbox_transforms,
 )
 
 
-EXPERIMENT_FAMILY = "family_coverage_reencoding_control_v1"
+FIXED_Q95_PROTOCOL = "family_coverage_reencoding_control_v1"
+MIXED_JPEG_PROTOCOL = "family_coverage_jpeg_mixed_v1"
+SUPPORTED_PROTOCOLS = {FIXED_Q95_PROTOCOL, MIXED_JPEG_PROTOCOL}
 MODEL_IDS = ["M5", "M7"]
 PROTECTED_UNSEEN = {
     "FaceDancer",
@@ -113,7 +116,7 @@ def load_control(
     if not path.is_file():
         raise FileNotFoundError(path)
     control = json.loads(path.read_text(encoding="utf-8"))
-    if control.get("protocol") != EXPERIMENT_FAMILY:
+    if control.get("protocol") not in SUPPORTED_PROTOCOLS:
         raise ValueError("Unexpected controlled re-encoding protocol.")
     if control.get("models") != MODEL_IDS:
         raise ValueError(f"Control models must be {MODEL_IDS}.")
@@ -151,12 +154,15 @@ def controlled_run_name(
     model_id: str,
     condition: dict,
     seed: int,
+    protocol: str,
 ) -> str:
-    return (
-        f"xception_{model_id.lower()}_{condition['name']}_"
-        "canonical256_jpegq95_letterbox299_control_v1_"
-        f"seed{seed}"
-    )
+    if protocol == FIXED_Q95_PROTOCOL:
+        suffix = "canonical256_jpegq95_letterbox299_control_v1"
+    elif protocol == MIXED_JPEG_PROTOCOL:
+        suffix = "canonical256_jpegmix75_80_85_90_95_letterbox299_v1"
+    else:
+        raise ValueError(f"Unsupported protocol: {protocol}")
+    return f"xception_{model_id.lower()}_{condition['name']}_{suffix}_seed{seed}"
 
 
 def checkpoint_path(
@@ -164,8 +170,13 @@ def checkpoint_path(
     model_id: str,
     condition: dict,
     seed: int,
+    protocol: str,
 ) -> Path:
-    return runs_root / controlled_run_name(model_id, condition, seed) / "best.pt"
+    return (
+        runs_root
+        / controlled_run_name(model_id, condition, seed, protocol)
+        / "best.pt"
+    )
 
 
 def validate_checkpoint(
@@ -183,26 +194,45 @@ def validate_checkpoint(
         raise ValueError(f"Evaluation requires best.pt: {checkpoint_file}")
     if checkpoint["model_name"] not in {"xception", "legacy_xception"}:
         raise ValueError(f"Unexpected model: {checkpoint['model_name']}")
-    if config.get("experiment_family") != EXPERIMENT_FAMILY:
+    protocol = control["protocol"]
+    if config.get("experiment_family") != protocol:
         raise ValueError(f"Unexpected experiment family in {checkpoint_file}")
-    if config.get("split_protocol") != EXPERIMENT_FAMILY:
+    if config.get("split_protocol") != protocol:
         raise ValueError(f"Unexpected split protocol in {checkpoint_file}")
-    if config.get("preprocessing_name") != CONTROLLED_REENCODE_NAME:
+    expected_preprocessing_name = (
+        CONTROLLED_REENCODE_NAME
+        if protocol == FIXED_Q95_PROTOCOL
+        else MIXED_JPEG_REENCODE_NAME
+    )
+    if config.get("preprocessing_name") != expected_preprocessing_name:
         raise ValueError(f"Unexpected preprocessing in {checkpoint_file}")
-    if config.get("condition_name") != f"{model_id.lower()}_{condition['name']}":
+    expected_condition_name = f"{model_id.lower()}_{condition['name']}"
+    if protocol == MIXED_JPEG_PROTOCOL:
+        expected_condition_name += "_jpeg_mixed"
+    if config.get("condition_name") != expected_condition_name:
         raise ValueError(f"Condition mismatch in {checkpoint_file}")
     if int(config.get("seed")) != seed:
         raise ValueError(f"Training seed mismatch in {checkpoint_file}")
     if config.get("manifest_sha256") != sha256_file(training_manifest):
         raise ValueError(f"Training manifest mismatch in {checkpoint_file}")
     saved = config.get("preprocessing", {})
-    for key in (
+    keys = [
         "canonical_size",
-        "jpeg_quality",
         "jpeg_subsampling",
         "jpeg_optimize",
         "jpeg_progressive",
-    ):
+    ]
+    if protocol == FIXED_Q95_PROTOCOL:
+        keys.append("jpeg_quality")
+    else:
+        keys.extend(
+            [
+                "train_jpeg_qualities",
+                "train_jpeg_sampling",
+                "validation_jpeg_quality",
+            ]
+        )
+    for key in keys:
         if saved.get(key) != preprocessing.get(key):
             raise ValueError(
                 f"Checkpoint preprocessing mismatch for {key}: "
@@ -230,7 +260,7 @@ def build_transform(data_config: dict, condition: dict, control: dict):
             jpeg_optimize=preprocessing["jpeg_optimize"],
             jpeg_progressive=preprocessing["jpeg_progressive"],
         ),
-        CONTROLLED_REENCODE_NAME,
+        control["preprocessing"]["name"],
     )
 
 
@@ -558,6 +588,7 @@ def build_report(
     seed_summary: pd.DataFrame,
     comparison: pd.DataFrame,
     jpeg_delta_aggregate: pd.DataFrame,
+    control: dict,
 ) -> str:
     primary = seed_summary[seed_summary["primary_condition"]].sort_values(
         "model"
@@ -574,15 +605,27 @@ def build_report(
         section_title = "Q95 baseline and JPEG sensitivity conditions"
     else:
         section_title = "Primary controlled condition"
-    lines = [
-        "# M5/M7 Controlled Re-encoding Evaluation",
-        "",
-        (
+    if control["protocol"] == MIXED_JPEG_PROTOCOL:
+        title = "# M5/M7 Mixed-JPEG Augmentation Evaluation"
+        training_note = (
+            "> Checkpoints were trained with RGB decode, Letterbox 256, "
+            "uniformly sampled JPEG Q75/Q80/Q85/Q90/Q95 4:2:0, "
+            "Letterbox 299, and fixed normalization. Validation and model "
+            "selection remained fixed at Q95; no test-time tuning was "
+            "performed."
+        )
+    else:
+        title = "# M5/M7 Controlled Re-encoding Evaluation"
+        training_note = (
             "> Checkpoints were trained with RGB decode, Letterbox 256, "
             "JPEG Q95 4:2:0, Letterbox 299, and fixed normalization. The "
             "table names the evaluation-time condition; no test-time "
             "tuning was performed."
-        ),
+        )
+    lines = [
+        title,
+        "",
+        training_note,
         "",
         f"## {section_title}",
         "",
@@ -770,7 +813,11 @@ def main() -> None:
         }
         for seed in args.training_seeds:
             checkpoint_file = checkpoint_path(
-                paths["runs_root"], model_id, condition, seed
+                paths["runs_root"],
+                model_id,
+                condition,
+                seed,
+                control["protocol"],
             )
             if not checkpoint_file.is_file():
                 raise FileNotFoundError(checkpoint_file)
@@ -1025,7 +1072,9 @@ def main() -> None:
             index=False,
         )
     (output_root / "REPORT.md").write_text(
-        build_report(seed_summary, comparison, jpeg_delta_aggregate),
+        build_report(
+            seed_summary, comparison, jpeg_delta_aggregate, control
+        ),
         encoding="utf-8",
     )
     write_json(

@@ -35,6 +35,8 @@ from xception_preprocessing import (
     CONTROLLED_REENCODE_NAME,
     LETTERBOX_FILL_RGB,
     LETTERBOX_NAME,
+    MIXED_JPEG_REENCODE_NAME,
+    canonical_mixed_reencode_transforms,
     canonical_reencode_transforms,
     letterbox_transforms,
 )
@@ -90,6 +92,16 @@ def parse_args():
         default=None,
         help="Fixed JPEG quality for controlled in-memory re-encoding.",
     )
+    parser.add_argument(
+        "--train-jpeg-qualities",
+        nargs="+",
+        type=int,
+        default=None,
+        help=(
+            "Uniform JPEG quality choices used only during training. "
+            "Validation remains fixed at --jpeg-quality."
+        ),
+    )
     parser.add_argument("--jpeg-subsampling", type=int, default=2)
     parser.add_argument("--jpeg-optimize", action="store_true")
     parser.add_argument("--jpeg-progressive", action="store_true")
@@ -101,12 +113,24 @@ def make_loaders(train_frame, val_frame, data_root, data_config, args):
         training_transform, evaluation_transform = letterbox_transforms(
             data_config
         )
-    else:
+    elif args.train_jpeg_qualities is None:
         training_transform, evaluation_transform = (
             canonical_reencode_transforms(
                 data_config,
                 canonical_size=args.canonical_size,
                 jpeg_quality=args.jpeg_quality,
+                jpeg_subsampling=args.jpeg_subsampling,
+                jpeg_optimize=args.jpeg_optimize,
+                jpeg_progressive=args.jpeg_progressive,
+            )
+        )
+    else:
+        training_transform, evaluation_transform = (
+            canonical_mixed_reencode_transforms(
+                data_config,
+                canonical_size=args.canonical_size,
+                train_jpeg_qualities=args.train_jpeg_qualities,
+                validation_jpeg_quality=args.jpeg_quality,
                 jpeg_subsampling=args.jpeg_subsampling,
                 jpeg_optimize=args.jpeg_optimize,
                 jpeg_progressive=args.jpeg_progressive,
@@ -155,6 +179,27 @@ def main():
             raise ValueError("--jpeg-quality must be between 1 and 100.")
         if args.jpeg_subsampling not in {0, 1, 2}:
             raise ValueError("--jpeg-subsampling must be 0, 1, or 2.")
+        if args.train_jpeg_qualities is not None:
+            if not args.train_jpeg_qualities:
+                raise ValueError("--train-jpeg-qualities cannot be empty.")
+            if len(set(args.train_jpeg_qualities)) != len(
+                args.train_jpeg_qualities
+            ):
+                raise ValueError(
+                    "--train-jpeg-qualities values must be unique."
+                )
+            if any(
+                not 1 <= quality <= 100
+                for quality in args.train_jpeg_qualities
+            ):
+                raise ValueError(
+                    "--train-jpeg-qualities must be between 1 and 100."
+                )
+    elif args.train_jpeg_qualities is not None:
+        raise ValueError(
+            "--train-jpeg-qualities requires --canonical-size and "
+            "--jpeg-quality."
+        )
     if not args.manifest.is_file():
         raise FileNotFoundError(args.manifest)
     if not args.data_root.is_dir():
@@ -202,14 +247,22 @@ def main():
     )
     scaler = torch.amp.GradScaler("cuda", enabled=True)
 
+    mixed_jpeg = args.train_jpeg_qualities is not None
     preprocessing_name = (
-        CONTROLLED_REENCODE_NAME if controlled_reencode else LETTERBOX_NAME
+        MIXED_JPEG_REENCODE_NAME
+        if mixed_jpeg
+        else CONTROLLED_REENCODE_NAME
+        if controlled_reencode
+        else LETTERBOX_NAME
     )
     if controlled_reencode:
         preprocessing = {
             "policy": (
-                "common aspect-preserving canonical canvas, fixed in-memory "
-                "JPEG round trip, then Xception letterbox"
+                "common aspect-preserving canonical canvas, uniformly "
+                "sampled in-memory JPEG round trip, then Xception letterbox"
+                if mixed_jpeg
+                else "common aspect-preserving canonical canvas, fixed "
+                "in-memory JPEG round trip, then Xception letterbox"
             ),
             "canonical_size": int(args.canonical_size),
             "canonical_resize": (
@@ -220,7 +273,6 @@ def main():
                 "symmetric constant padding to canonical square"
             ),
             "canonical_padding_fill_rgb": LETTERBOX_FILL_RGB,
-            "jpeg_quality": int(args.jpeg_quality),
             "jpeg_subsampling": int(args.jpeg_subsampling),
             "jpeg_optimize": bool(args.jpeg_optimize),
             "jpeg_progressive": bool(args.jpeg_progressive),
@@ -229,6 +281,18 @@ def main():
             ),
             "source_files_modified": False,
         }
+        if mixed_jpeg:
+            preprocessing.update(
+                {
+                    "train_jpeg_qualities": [
+                        int(value) for value in args.train_jpeg_qualities
+                    ],
+                    "train_jpeg_sampling": "uniform",
+                    "validation_jpeg_quality": int(args.jpeg_quality),
+                }
+            )
+        else:
+            preprocessing["jpeg_quality"] = int(args.jpeg_quality)
     else:
         preprocessing = {
             "policy": "preserve full frame and aspect ratio",
