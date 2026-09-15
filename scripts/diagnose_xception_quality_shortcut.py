@@ -39,11 +39,13 @@ from evaluate_xception_family_coverage import (
 from train_baseline import sha256_file, write_json
 from xception_preprocessing import (
     LETTERBOX_NAME,
+    Letterbox,
     evaluation_transform_from_checkpoint,
 )
 
 
 EXPECTED_IMAGE_SIZE = (256, 256)
+MODEL_VISIBLE_SIZE = 299
 MODEL_IDS = ("M3", "M5", "M7")
 QUALITY_METRICS = (
     "laplacian_variance",
@@ -205,6 +207,11 @@ def image_quality_metrics(image: Image.Image) -> dict[str, float]:
     }
 
 
+def model_visible_quality_image(image: Image.Image) -> Image.Image:
+    """Apply the frozen geometric input policy without tensor normalization."""
+    return Letterbox(size=MODEL_VISIBLE_SIZE)(image.convert("RGB"))
+
+
 def threaded_map(function, values, workers: int, description: str) -> list:
     values = list(values)
     if workers <= 1:
@@ -242,9 +249,7 @@ def compute_original_quality(
     def process(row):
         with Image.open(data_root / row.source_path) as image:
             rgb = image.convert("RGB")
-            if rgb.size != EXPECTED_IMAGE_SIZE:
-                raise ValueError(f"Unexpected size for {row.source_path}: {rgb.size}")
-            metrics = image_quality_metrics(rgb)
+            metrics = image_quality_metrics(model_visible_quality_image(rgb))
         return base_quality_row(row, "original", metrics)
 
     rows = threaded_map(
@@ -273,7 +278,9 @@ def compute_condition_quality(
                 base_quality_row(
                     row,
                     condition["name"],
-                    image_quality_metrics(transformed),
+                    image_quality_metrics(
+                        model_visible_quality_image(transformed)
+                    ),
                 )
             )
         return rows
@@ -495,6 +502,7 @@ def infer_counterfactual_conditions(
     batch_size: int,
     workers: int,
     device: torch.device,
+    reuse_cache: bool,
 ) -> pd.DataFrame:
     model_output = output_dir / "counterfactual_predictions" / model_id.lower()
     model_output.mkdir(parents=True, exist_ok=True)
@@ -516,7 +524,7 @@ def infer_counterfactual_conditions(
 
     for condition in conditions:
         output_path = model_output / f"{condition['name']}.csv"
-        if output_path.is_file():
+        if output_path.is_file() and reuse_cache:
             completed = pd.read_csv(output_path)
             if (
                 len(completed) == len(real_test)
@@ -1132,6 +1140,7 @@ def main() -> None:
 
     output_dir = paths["output_dir"]
     metadata_path = output_dir / "run_metadata.json"
+    invalidate_cached_artifacts = False
     expected_metadata = {
         "protocol": diagnostic["protocol"],
         "seed": args.seed,
@@ -1139,6 +1148,7 @@ def main() -> None:
         "diagnostic_config_sha256": sha256_file(paths["diagnostic_config"]),
         "conditions_config_sha256": sha256_file(paths["conditions_config"]),
         "checkpoint_sha256": checkpoint_hashes,
+        "diagnostic_script_sha256": sha256_file(Path(__file__).resolve()),
     }
     if output_dir.exists() and any(output_dir.iterdir()):
         if not metadata_path.is_file():
@@ -1146,9 +1156,45 @@ def main() -> None:
                 f"Non-empty directory is not a resumable diagnostic: {output_dir}"
             )
         existing_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        for key, value in expected_metadata.items():
+        invariant_keys = (
+            "protocol",
+            "seed",
+            "test_manifest_sha256",
+            "conditions_config_sha256",
+            "checkpoint_sha256",
+        )
+        for key in invariant_keys:
+            value = expected_metadata[key]
             if existing_metadata.get(key) != value:
                 raise RuntimeError(f"Diagnostic resume mismatch for {key}")
+        changed_implementation = any(
+            existing_metadata.get(key) != expected_metadata[key]
+            for key in (
+                "diagnostic_config_sha256",
+                "diagnostic_script_sha256",
+            )
+        )
+        if changed_implementation:
+            if (output_dir / "diagnostic_summary.json").is_file():
+                raise RuntimeError(
+                    "A completed diagnostic used an older implementation. "
+                    "Preserve it and choose a different output directory."
+                )
+            invalidate_cached_artifacts = True
+            print(
+                "Refreshing incomplete diagnostic artifacts after a code/config fix",
+                flush=True,
+            )
+            write_json(
+                metadata_path,
+                {
+                    **existing_metadata,
+                    **expected_metadata,
+                    "implementation_refreshed_at_utc": datetime.now(
+                        timezone.utc
+                    ).isoformat(),
+                },
+            )
     else:
         output_dir.mkdir(parents=True, exist_ok=True)
         write_json(
@@ -1167,7 +1213,7 @@ def main() -> None:
 
     m3_manifest = read_manifest(training_manifests["M3"])
     calibration_samples_path = output_dir / "calibration_samples.csv"
-    if calibration_samples_path.is_file():
+    if calibration_samples_path.is_file() and not invalidate_cached_artifacts:
         calibration_samples = read_manifest(calibration_samples_path)
     else:
         calibration_samples = prepare_calibration_samples(
@@ -1188,7 +1234,7 @@ def main() -> None:
         )
 
     calibration_quality_path = output_dir / "calibration_quality_metrics.csv"
-    if calibration_quality_path.is_file():
+    if calibration_quality_path.is_file() and not invalidate_cached_artifacts:
         calibration_quality = pd.read_csv(calibration_quality_path)
     else:
         calibration_quality = compute_calibration_quality(
@@ -1223,7 +1269,7 @@ def main() -> None:
     atomic_to_csv(calibration_matching, output_dir / "quality_matching_calibration.csv")
 
     test_quality_path = output_dir / "canonical_test_quality_metrics.csv"
-    if test_quality_path.is_file():
+    if test_quality_path.is_file() and not invalidate_cached_artifacts:
         test_quality = pd.read_csv(test_quality_path)
     else:
         test_quality = compute_original_quality(
@@ -1235,7 +1281,7 @@ def main() -> None:
     atomic_to_csv(quality_summary(test_quality), output_dir / "quality_summary_by_method.csv")
 
     real_condition_quality_path = output_dir / "real_condition_quality_metrics.csv"
-    if real_condition_quality_path.is_file():
+    if real_condition_quality_path.is_file() and not invalidate_cached_artifacts:
         real_condition_quality = pd.read_csv(real_condition_quality_path)
     else:
         real_condition_quality = compute_condition_quality(
@@ -1290,6 +1336,7 @@ def main() -> None:
                 args.batch_size,
                 args.workers,
                 device,
+                not invalidate_cached_artifacts,
             )
         )
     counterfactual_predictions = pd.concat(

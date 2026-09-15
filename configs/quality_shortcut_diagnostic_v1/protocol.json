@@ -8,7 +8,7 @@
     "samples_per_method": 1000,
     "source_method": "original",
     "target_methods": ["StyleGAN3", "DiT"],
-    "selection_rule": "minimum mean robust-scaled 1D Wasserstein distance across pixel quality metrics",
+    "selection_rule": "minimum mean robust-scaled 1D Wasserstein distance across model-visible pixel quality metrics",
     "model_scores_used_for_selection": false,
     "test_data_used_for_selection": false
   },
@@ -51,7 +51,9 @@
     "jpeg_round_trip": ["original", "jpeg_q90", "jpeg_q75"]
   },
   "metric_definitions": {
-    "grayscale": "Pillow RGB converted to float luminance 0.299R + 0.587G + 0.114B on the pre-Xception 256x256 representation",
+    "quality_representation": "each decoded source is passed through the frozen Letterbox 299 geometry before metrics; tensor normalization is not applied",
+    "counterfactual_order": "256x256 canonical real -> in-memory degradation -> frozen Letterbox 299 -> quality metric or Xception normalization",
+    "grayscale": "Pillow RGB converted to float luminance 0.299R + 0.587G + 0.114B on the model-visible 299x299 representation",
     "laplacian_variance": "variance of the 4-neighbour discrete Laplacian",
     "mean_gradient_magnitude": "mean Euclidean magnitude of NumPy spatial gradients",
     "high_frequency_energy_ratio": "2D FFT power outside radial frequency 0.25 cycles/pixel divided by non-DC power",
