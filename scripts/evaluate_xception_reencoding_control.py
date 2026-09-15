@@ -61,6 +61,7 @@ PROTECTED_UNSEEN = {
 FFPP_METHODS = {"Deepfakes", "Face2Face"}
 EXPECTED_TEST_IMAGES = 30_000
 EXPECTED_IMAGES_PER_METHOD = 2_000
+JPEG_REFERENCE_CONDITION = "canonical_256_jpeg_q95"
 
 
 def parse_args() -> argparse.Namespace:
@@ -479,26 +480,99 @@ def compare_models(model_summary: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def compare_jpeg_conditions(model_summary: pd.DataFrame) -> pd.DataFrame:
+    metrics = [
+        "real_fpr",
+        "fake_recall",
+        "roc_auc",
+        "auprc",
+        "all_methods_macro_auc",
+        "protected_unseen_macro_auc",
+        "protected_unseen_excluding_pixart_macro_auc",
+        "pixart_auc",
+        "real_mean_fake_score",
+        "fake_mean_fake_score",
+    ]
+    if JPEG_REFERENCE_CONDITION not in set(
+        model_summary["evaluation_condition"]
+    ):
+        return pd.DataFrame()
+    rows = []
+    for (model_id, seed), group in model_summary.groupby(
+        ["model", "training_seed"], sort=True
+    ):
+        by_condition = group.set_index("evaluation_condition")
+        reference = by_condition.loc[JPEG_REFERENCE_CONDITION]
+        for target_name, target in by_condition.iterrows():
+            if target_name == JPEG_REFERENCE_CONDITION:
+                continue
+            row = {
+                "model": model_id,
+                "training_seed": int(seed),
+                "reference_condition": JPEG_REFERENCE_CONDITION,
+                "target_condition": target_name,
+            }
+            for metric in metrics:
+                reference_value = float(reference[metric])
+                target_value = float(target[metric])
+                row[f"reference_{metric}"] = reference_value
+                row[f"target_{metric}"] = target_value
+                row[f"delta_{metric}"] = target_value - reference_value
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def aggregate_jpeg_condition_deltas(delta_summary: pd.DataFrame) -> pd.DataFrame:
+    if delta_summary.empty:
+        return pd.DataFrame()
+    delta_columns = [
+        column
+        for column in delta_summary.columns
+        if column.startswith("delta_")
+    ]
+    rows = []
+    for (model_id, target_name), group in delta_summary.groupby(
+        ["model", "target_condition"], sort=True
+    ):
+        row = {
+            "model": model_id,
+            "reference_condition": JPEG_REFERENCE_CONDITION,
+            "target_condition": target_name,
+            "training_seeds": "|".join(
+                map(str, sorted(group["training_seed"]))
+            ),
+            "seed_runs": int(len(group)),
+        }
+        for column in delta_columns:
+            row[f"{column}_mean"] = float(group[column].mean())
+            row[f"{column}_std"] = (
+                float(group[column].std(ddof=1))
+                if len(group) > 1
+                else 0.0
+            )
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def build_report(
     seed_summary: pd.DataFrame,
     comparison: pd.DataFrame,
+    jpeg_delta_aggregate: pd.DataFrame,
 ) -> str:
     primary = seed_summary[seed_summary["primary_condition"]].sort_values(
         "model"
     )
+    displayed = seed_summary.sort_values(
+        ["evaluation_condition", "model"]
+    )
+    displayed_comparison = comparison.sort_values(
+        ["evaluation_condition", "training_seed"]
+    )
     if primary.empty:
-        displayed = seed_summary.sort_values(
-            ["evaluation_condition", "model"]
-        )
-        displayed_comparison = comparison.sort_values(
-            ["evaluation_condition", "training_seed"]
-        )
         section_title = "Selected sensitivity conditions"
+    elif seed_summary["evaluation_condition"].nunique() > 1:
+        section_title = "Q95 baseline and JPEG sensitivity conditions"
     else:
-        displayed = primary
-        displayed_comparison = comparison[
-            comparison["primary_condition"]
-        ]
         section_title = "Primary controlled condition"
     lines = [
         "# M5/M7 Controlled Re-encoding Evaluation",
@@ -551,6 +625,36 @@ def build_report(
             f"{row.m5_minus_m7_protected_unseen_excluding_pixart_macro_auc:+.4f} | "
             f"{row.m5_minus_m7_pixart_auc:+.4f} |"
         )
+    if not jpeg_delta_aggregate.empty:
+        lines.extend(
+            [
+                "",
+                "## Change from matched JPEG Q95",
+                "",
+                (
+                    "| Model | Target | Real fake-score delta | Real FPR "
+                    "delta | All-method AUC delta | Protected unseen AUC "
+                    "delta | Delta without PixArt | PixArt AUC delta |"
+                ),
+                "|---|---|---:|---:|---:|---:|---:|---:|",
+            ]
+        )
+        for row in jpeg_delta_aggregate.itertuples(index=False):
+            lines.append(
+                f"| {row.model} | {row.target_condition} | "
+                f"{row.delta_real_mean_fake_score_mean:+.4f} ± "
+                f"{row.delta_real_mean_fake_score_std:.4f} | "
+                f"{row.delta_real_fpr_mean:+.4f} ± "
+                f"{row.delta_real_fpr_std:.4f} | "
+                f"{row.delta_all_methods_macro_auc_mean:+.4f} ± "
+                f"{row.delta_all_methods_macro_auc_std:.4f} | "
+                f"{row.delta_protected_unseen_macro_auc_mean:+.4f} ± "
+                f"{row.delta_protected_unseen_macro_auc_std:.4f} | "
+                f"{row.delta_protected_unseen_excluding_pixart_macro_auc_mean:+.4f} ± "
+                f"{row.delta_protected_unseen_excluding_pixart_macro_auc_std:.4f} | "
+                f"{row.delta_pixart_auc_mean:+.4f} ± "
+                f"{row.delta_pixart_auc_std:.4f} |"
+            )
     lines.extend(
         [
             "",
@@ -901,6 +1005,10 @@ def main() -> None:
     seed_summary = aggregate_seeds(model_summary)
     method_seed_summary = aggregate_method_seeds(method_summary)
     comparison = compare_models(model_summary)
+    jpeg_delta_summary = compare_jpeg_conditions(model_summary)
+    jpeg_delta_aggregate = aggregate_jpeg_condition_deltas(
+        jpeg_delta_summary
+    )
     model_summary.to_csv(output_root / "model_seed_summary.csv", index=False)
     method_summary.to_csv(output_root / "method_seed_summary.csv", index=False)
     seed_summary.to_csv(output_root / "seed_aggregate_summary.csv", index=False)
@@ -908,8 +1016,17 @@ def main() -> None:
         output_root / "method_seed_aggregate_summary.csv", index=False
     )
     comparison.to_csv(output_root / "m5_m7_comparison.csv", index=False)
+    if not jpeg_delta_summary.empty:
+        jpeg_delta_summary.to_csv(
+            output_root / "jpeg_condition_delta_summary.csv", index=False
+        )
+        jpeg_delta_aggregate.to_csv(
+            output_root / "jpeg_condition_delta_seed_aggregate.csv",
+            index=False,
+        )
     (output_root / "REPORT.md").write_text(
-        build_report(seed_summary, comparison), encoding="utf-8"
+        build_report(seed_summary, comparison, jpeg_delta_aggregate),
+        encoding="utf-8",
     )
     write_json(
         output_root / "evaluation_summary.json",
