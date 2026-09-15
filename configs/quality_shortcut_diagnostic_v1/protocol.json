@@ -1,0 +1,62 @@
+{
+  "protocol": "quality_shortcut_diagnostic_v1",
+  "models": ["M3", "M5", "M7"],
+  "classification_threshold": 0.5,
+  "calibration": {
+    "source_manifest": "m3_seed42.csv",
+    "split": "train",
+    "samples_per_method": 1000,
+    "source_method": "original",
+    "target_methods": ["StyleGAN3", "DiT"],
+    "selection_rule": "minimum mean robust-scaled 1D Wasserstein distance across pixel quality metrics",
+    "model_scores_used_for_selection": false,
+    "test_data_used_for_selection": false
+  },
+  "quality_metrics": [
+    "laplacian_variance",
+    "mean_gradient_magnitude",
+    "high_frequency_energy_ratio",
+    "brightness",
+    "contrast",
+    "edge_density"
+  ],
+  "quality_matching_metrics": [
+    "laplacian_variance",
+    "mean_gradient_magnitude",
+    "high_frequency_energy_ratio",
+    "edge_density"
+  ],
+  "transformations": [
+    {"name": "original", "kind": "identity", "severity": 0},
+    {"name": "downsample_224_to_256", "kind": "downsample_upsample", "short_size": 224, "restore_size": 256, "interpolation": "bicubic", "severity": 1},
+    {"name": "downsample_192_to_256", "kind": "downsample_upsample", "short_size": 192, "restore_size": 256, "interpolation": "bicubic", "severity": 2},
+    {"name": "downsample_160_to_256", "kind": "downsample_upsample", "short_size": 160, "restore_size": 256, "interpolation": "bicubic", "severity": 3},
+    {"name": "gaussian_blur_sigma_0p5", "kind": "gaussian_blur", "sigma": 0.5, "severity": 1},
+    {"name": "gaussian_blur_sigma_1p0", "kind": "gaussian_blur", "sigma": 1.0, "severity": 2},
+    {"name": "jpeg_q90", "kind": "jpeg_round_trip", "quality": 90, "subsampling": 2, "optimize": false, "progressive": false, "severity": 1},
+    {"name": "jpeg_q75", "kind": "jpeg_round_trip", "quality": 75, "subsampling": 2, "optimize": false, "progressive": false, "severity": 2}
+  ],
+  "dose_response_families": {
+    "downsample_upsample": [
+      "original",
+      "downsample_224_to_256",
+      "downsample_192_to_256",
+      "downsample_160_to_256"
+    ],
+    "gaussian_blur": [
+      "original",
+      "gaussian_blur_sigma_0p5",
+      "gaussian_blur_sigma_1p0"
+    ],
+    "jpeg_round_trip": ["original", "jpeg_q90", "jpeg_q75"]
+  },
+  "metric_definitions": {
+    "grayscale": "Pillow RGB converted to float luminance 0.299R + 0.587G + 0.114B on the pre-Xception 256x256 representation",
+    "laplacian_variance": "variance of the 4-neighbour discrete Laplacian",
+    "mean_gradient_magnitude": "mean Euclidean magnitude of NumPy spatial gradients",
+    "high_frequency_energy_ratio": "2D FFT power outside radial frequency 0.25 cycles/pixel divided by non-DC power",
+    "brightness": "mean grayscale intensity on [0,255]",
+    "contrast": "grayscale standard deviation on [0,255]",
+    "edge_density": "fraction of pixels with gradient magnitude greater than 20 intensity units"
+  }
+}
