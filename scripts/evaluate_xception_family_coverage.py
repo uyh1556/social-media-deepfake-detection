@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate M1-M7 checkpoints on one frozen balanced all-method test set."""
+"""Evaluate M0-M7 checkpoints on one frozen balanced all-method test set."""
 
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ from xception_preprocessing import (
 )
 
 
-MODEL_IDS = [f"M{index}" for index in range(1, 8)]
+MODEL_IDS = [f"M{index}" for index in range(0, 8)]
 EXPECTED_TEST_IMAGES = 30_000
 EXPECTED_IMAGES_PER_METHOD = 2_000
 FFPP_METHODS = {"Deepfakes", "Face2Face"}
@@ -66,6 +66,28 @@ def parse_args() -> argparse.Namespace:
 
 def read_manifest(path: Path) -> pd.DataFrame:
     return pd.read_csv(path, dtype=str, keep_default_na=False)
+
+
+def load_conditions(config_path: Path) -> dict[str, dict]:
+    """Merge the separately frozen M0 definition with the M1-M7 protocol."""
+    protocol = json.loads(config_path.read_text(encoding="utf-8"))
+    m0_path = config_path.with_name("m0.json")
+    if not m0_path.is_file():
+        raise FileNotFoundError(m0_path)
+    m0_protocol = json.loads(m0_path.read_text(encoding="utf-8"))
+    for key in ("protocol", "preprocessing"):
+        if m0_protocol.get(key) != protocol.get(key):
+            raise ValueError(f"M0 and M1-M7 {key} settings do not match.")
+    conditions = {
+        **m0_protocol["conditions"],
+        **protocol["conditions"],
+    }
+    if set(conditions) != set(MODEL_IDS):
+        raise ValueError(
+            f"Expected condition definitions for {MODEL_IDS}, "
+            f"found {sorted(conditions)}"
+        )
+    return conditions
 
 
 def split_tokens(values: pd.Series) -> set[str]:
@@ -345,8 +367,7 @@ def main() -> None:
     ):
         if not path.exists():
             raise FileNotFoundError(path)
-    protocol = json.loads(config_path.read_text(encoding="utf-8"))
-    conditions = protocol["conditions"]
+    conditions = load_conditions(config_path)
 
     test_frame = read_manifest(test_manifest)
     validate_test_manifest(test_frame)
@@ -396,7 +417,7 @@ def main() -> None:
         if reference_data_config is None:
             reference_data_config = data_config
         elif data_config != reference_data_config:
-            raise ValueError("M1-M7 checkpoints do not share one input configuration.")
+            raise ValueError("M0-M7 checkpoints do not share one input configuration.")
         checkpoints[model_id] = {
             "path": checkpoint_file,
             **checkpoint_info,
