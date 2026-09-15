@@ -1,0 +1,47 @@
+{
+  "protocol": "jpeg_shortcut_all_models_v1",
+  "models": ["M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7"],
+  "classification_threshold": 0.5,
+  "canonical_source": "reuse and verify frozen all-method evaluation predictions",
+  "transformations": [
+    {
+      "name": "original",
+      "kind": "identity",
+      "severity": 0
+    },
+    {
+      "name": "jpeg_q95",
+      "kind": "jpeg_round_trip",
+      "quality": 95,
+      "subsampling": 2,
+      "optimize": false,
+      "progressive": false,
+      "severity": 1
+    },
+    {
+      "name": "jpeg_q90",
+      "kind": "jpeg_round_trip",
+      "quality": 90,
+      "subsampling": 2,
+      "optimize": false,
+      "progressive": false,
+      "severity": 2
+    },
+    {
+      "name": "jpeg_q75",
+      "kind": "jpeg_round_trip",
+      "quality": 75,
+      "subsampling": 2,
+      "optimize": false,
+      "progressive": false,
+      "severity": 3
+    }
+  ],
+  "metric_policy": {
+    "overall": "all 30000 images",
+    "per_method": "the same 2000 real images versus 2000 images from each fake method",
+    "paired": "same-image fake-score and decision shifts from original to each JPEG condition",
+    "bootstrap_unit": "group_id cluster"
+  },
+  "interpretation": "diagnostic only; no retraining, threshold tuning, source-image rewrite, or checkpoint modification"
+}
