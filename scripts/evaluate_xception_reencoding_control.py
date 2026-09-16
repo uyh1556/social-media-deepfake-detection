@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate controlled-reencoding M5/M7 checkpoints across fixed seeds."""
+"""Evaluate controlled-reencoding Xception checkpoints across fixed seeds."""
 
 from __future__ import annotations
 
@@ -52,7 +52,8 @@ from xception_preprocessing import (
 FIXED_Q95_PROTOCOL = "family_coverage_reencoding_control_v1"
 MIXED_JPEG_PROTOCOL = "family_coverage_jpeg_mixed_v1"
 SUPPORTED_PROTOCOLS = {FIXED_Q95_PROTOCOL, MIXED_JPEG_PROTOCOL}
-MODEL_IDS = ["M5", "M7"]
+ALL_MODEL_IDS = [f"M{index}" for index in range(8)]
+MIXED_MODEL_IDS = ["M5", "M7"]
 PROTECTED_UNSEEN = {
     "FaceDancer",
     "InSwapper",
@@ -95,6 +96,16 @@ def parse_args() -> argparse.Namespace:
         default=[42, 43, 44],
     )
     parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=ALL_MODEL_IDS,
+        default=None,
+        help=(
+            "Models to evaluate. Defaults to every model enabled by the "
+            "selected control config."
+        ),
+    )
+    parser.add_argument(
         "--evaluation-conditions",
         nargs="+",
         default=["canonical_256_jpeg_q95"],
@@ -118,8 +129,16 @@ def load_control(
     control = json.loads(path.read_text(encoding="utf-8"))
     if control.get("protocol") not in SUPPORTED_PROTOCOLS:
         raise ValueError("Unexpected controlled re-encoding protocol.")
-    if control.get("models") != MODEL_IDS:
-        raise ValueError(f"Control models must be {MODEL_IDS}.")
+    configured_models = control.get("models")
+    if control.get("protocol") == FIXED_Q95_PROTOCOL:
+        allowed_model_sets = [MIXED_MODEL_IDS, ALL_MODEL_IDS]
+    else:
+        allowed_model_sets = [MIXED_MODEL_IDS]
+    if configured_models not in allowed_model_sets:
+        raise ValueError(
+            f"Unexpected control models: {configured_models}. "
+            f"Allowed: {allowed_model_sets}."
+        )
     allowed_seeds = set(control.get("training_seeds", []))
     if not seeds or set(seeds) - allowed_seeds:
         raise ValueError(
@@ -490,7 +509,7 @@ def compare_models(model_summary: pd.DataFrame) -> pd.DataFrame:
         ["training_seed", "evaluation_condition"], sort=True
     ):
         by_model = group.set_index("model")
-        if set(by_model.index) != set(MODEL_IDS):
+        if not set(MIXED_MODEL_IDS).issubset(by_model.index):
             raise RuntimeError(
                 f"M5/M7 pairing is incomplete for seed={seed}, "
                 f"condition={evaluation_condition}"
@@ -615,7 +634,11 @@ def build_report(
             "performed."
         )
     else:
-        title = "# M5/M7 Controlled Re-encoding Evaluation"
+        title = (
+            "# M0-M7 Controlled Re-encoding Evaluation"
+            if control["models"] == ALL_MODEL_IDS
+            else "# M5/M7 Controlled Re-encoding Evaluation"
+        )
         training_note = (
             "> Checkpoints were trained with RGB decode, Letterbox 256, "
             "JPEG Q95 4:2:0, Letterbox 299, and fixed normalization. The "
@@ -750,6 +773,20 @@ def main() -> None:
         args.training_seeds,
         args.evaluation_conditions,
     )
+    model_ids = args.models or control["models"]
+    if len(model_ids) != len(set(model_ids)):
+        raise ValueError("Models must be unique.")
+    unsupported_models = set(model_ids) - set(control["models"])
+    if unsupported_models:
+        raise ValueError(
+            f"Models are not enabled by this protocol: "
+            f"{sorted(unsupported_models)}"
+        )
+    if not set(MIXED_MODEL_IDS).issubset(model_ids):
+        raise ValueError(
+            "This aggregate evaluator requires M5 and M7 so their frozen "
+            "comparison remains available."
+        )
     evaluation_conditions = [
         item
         for item in control["evaluation_conditions"]
@@ -790,7 +827,7 @@ def main() -> None:
         "evaluation_conditions": args.evaluation_conditions,
         "models": {},
     }
-    for model_id in MODEL_IDS:
+    for model_id in model_ids:
         condition = conditions[model_id]
         training_manifest = (
             paths["training_manifest_dir"] / f"{model_id.lower()}_seed42.csv"
@@ -885,7 +922,7 @@ def main() -> None:
 
     model_rows = []
     all_method_rows = []
-    for model_id in MODEL_IDS:
+    for model_id in model_ids:
         training_condition = conditions[model_id]
         training_manifest = (
             paths["training_manifest_dir"] / f"{model_id.lower()}_seed42.csv"
@@ -1082,7 +1119,7 @@ def main() -> None:
         {
             "created_at_utc": datetime.now(timezone.utc).isoformat(),
             "protocol": control["protocol"],
-            "models": MODEL_IDS,
+            "models": model_ids,
             "training_seeds": args.training_seeds,
             "evaluation_conditions": args.evaluation_conditions,
             "test_images": len(test_frame),
