@@ -57,7 +57,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--patience", type=int, default=3)
-    parser.add_argument("--seed", type=int, choices=[42, 43, 44], required=True)
+    seed_group = parser.add_mutually_exclusive_group(required=True)
+    seed_group.add_argument("--seed", type=int, choices=[42, 43, 44])
+    seed_group.add_argument(
+        "--seeds",
+        nargs="+",
+        type=int,
+        choices=[42, 43, 44],
+        help="Run multiple training seeds sequentially and stop on failure.",
+    )
     return parser.parse_args()
 
 
@@ -105,7 +113,14 @@ def main() -> None:
     args.output_root = args.output_root.resolve()
     conditions_config = args.conditions_config.resolve()
     control_config = args.control_config.resolve()
-    control = load_control(control_config, args.condition, args.seed)
+    seeds = args.seeds if args.seeds is not None else [args.seed]
+    if len(seeds) != len(set(seeds)):
+        raise ValueError("Training seeds must be unique.")
+    controls = {
+        seed: load_control(control_config, args.condition, seed)
+        for seed in seeds
+    }
+    control = controls[seeds[0]]
     family_protocol, condition = load_condition(
         conditions_config, args.condition
     )
@@ -125,68 +140,87 @@ def main() -> None:
     if not args.data_root.is_dir():
         raise FileNotFoundError(args.data_root)
 
-    run_dir = args.output_root / run_name(
-        args.condition, condition, args.seed
-    )
-    last_checkpoint = run_dir / "last.pt"
     preprocessing = control["preprocessing"]
     trainer = Path(__file__).resolve().with_name(
         "train_xception_letterbox.py"
     )
-    command = [
-        sys.executable,
-        "-u",
-        str(trainer),
-        "--data-root",
-        str(args.data_root),
-        "--manifest",
-        str(args.manifest),
-        "--output-dir",
-        str(run_dir),
-        "--split-protocol",
-        control["protocol"],
-        "--model",
-        "xception",
-        "--epochs",
-        str(args.epochs),
-        "--batch-size",
-        str(args.batch_size),
-        "--workers",
-        str(args.workers),
-        "--learning-rate",
-        str(args.learning_rate),
-        "--weight-decay",
-        str(args.weight_decay),
-        "--patience",
-        str(args.patience),
-        "--seed",
-        str(args.seed),
-        "--experiment-family",
-        EXPERIMENT_FAMILY,
-        "--condition-name",
-        f"{args.condition.lower()}_{condition['name']}",
-        "--canonical-size",
-        str(preprocessing["canonical_size"]),
-        "--jpeg-quality",
-        str(preprocessing["jpeg_quality"]),
-        "--jpeg-subsampling",
-        str(preprocessing["jpeg_subsampling"]),
-        "--persistent-progress",
-    ]
-    if preprocessing["jpeg_optimize"]:
-        command.append("--jpeg-optimize")
-    if preprocessing["jpeg_progressive"]:
-        command.append("--jpeg-progressive")
-    if last_checkpoint.is_file():
-        command.extend(["--resume", str(last_checkpoint)])
-        print(f"Resuming {args.condition}/seed{args.seed}: {last_checkpoint}")
-    else:
-        print(
-            f"Starting {args.condition}/seed{args.seed} from "
-            "ImageNet-pretrained Xception"
+    for seed in seeds:
+        seed_control = controls[seed]
+        if seed_control != control:
+            raise ValueError("Control protocol changed across training seeds.")
+        run_dir = args.output_root / run_name(
+            args.condition, condition, seed
         )
-    print("Run directory:", run_dir, flush=True)
-    subprocess.run(command, check=True)
+        last_checkpoint = run_dir / "last.pt"
+        command = [
+            sys.executable,
+            "-u",
+            str(trainer),
+            "--data-root",
+            str(args.data_root),
+            "--manifest",
+            str(args.manifest),
+            "--output-dir",
+            str(run_dir),
+            "--split-protocol",
+            control["protocol"],
+            "--model",
+            "xception",
+            "--epochs",
+            str(args.epochs),
+            "--batch-size",
+            str(args.batch_size),
+            "--workers",
+            str(args.workers),
+            "--learning-rate",
+            str(args.learning_rate),
+            "--weight-decay",
+            str(args.weight_decay),
+            "--patience",
+            str(args.patience),
+            "--seed",
+            str(seed),
+            "--experiment-family",
+            EXPERIMENT_FAMILY,
+            "--condition-name",
+            f"{args.condition.lower()}_{condition['name']}",
+            "--canonical-size",
+            str(preprocessing["canonical_size"]),
+            "--jpeg-quality",
+            str(preprocessing["jpeg_quality"]),
+            "--jpeg-subsampling",
+            str(preprocessing["jpeg_subsampling"]),
+            "--persistent-progress",
+        ]
+        if preprocessing["jpeg_optimize"]:
+            command.append("--jpeg-optimize")
+        if preprocessing["jpeg_progressive"]:
+            command.append("--jpeg-progressive")
+        print(
+            f"\n===== {args.condition} / seed {seed} =====",
+            flush=True,
+        )
+        if last_checkpoint.is_file():
+            command.extend(["--resume", str(last_checkpoint)])
+            print(
+                f"Resuming {args.condition}/seed{seed}: "
+                f"{last_checkpoint}",
+                flush=True,
+            )
+        else:
+            print(
+                f"Starting {args.condition}/seed{seed} from "
+                "ImageNet-pretrained Xception",
+                flush=True,
+            )
+        print("Run directory:", run_dir, flush=True)
+        subprocess.run(command, check=True)
+
+    print(
+        f"Completed {args.condition} seeds: "
+        + ", ".join(map(str, seeds)),
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
