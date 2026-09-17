@@ -133,7 +133,7 @@ def load_control(
     if control.get("protocol") == FIXED_Q95_PROTOCOL:
         allowed_model_sets = [MIXED_MODEL_IDS, ALL_MODEL_IDS]
     else:
-        allowed_model_sets = [MIXED_MODEL_IDS]
+        allowed_model_sets = [MIXED_MODEL_IDS, ALL_MODEL_IDS]
     if configured_models not in allowed_model_sets:
         raise ValueError(
             f"Unexpected control models: {configured_models}. "
@@ -625,7 +625,11 @@ def build_report(
     else:
         section_title = "Primary controlled condition"
     if control["protocol"] == MIXED_JPEG_PROTOCOL:
-        title = "# M5/M7 Mixed-JPEG Augmentation Evaluation"
+        title = (
+            "# M0-M7 Mixed-JPEG Augmentation Evaluation"
+            if control["models"] == ALL_MODEL_IDS
+            else "# M5/M7 Mixed-JPEG Augmentation Evaluation"
+        )
         training_note = (
             "> Checkpoints were trained with RGB decode, Letterbox 256, "
             "uniformly sampled JPEG Q75/Q80/Q85/Q90/Q95 4:2:0, "

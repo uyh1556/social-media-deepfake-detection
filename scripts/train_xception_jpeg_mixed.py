@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train M5/M7 Xception with label-independent mixed JPEG augmentation."""
+"""Train M0-M7 Xception with label-independent mixed JPEG augmentation."""
 
 from __future__ import annotations
 
@@ -31,7 +31,11 @@ def sha256_file(path: Path) -> str:
 def parse_args() -> argparse.Namespace:
     project_root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--condition", choices=["M5", "M7"], required=True)
+    parser.add_argument(
+        "--condition",
+        choices=[f"M{index}" for index in range(8)],
+        required=True,
+    )
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)

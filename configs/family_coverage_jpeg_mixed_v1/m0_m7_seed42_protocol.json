@@ -1,0 +1,77 @@
+{
+  "protocol": "family_coverage_jpeg_mixed_v1",
+  "models": ["M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7"],
+  "training_manifest_sampling_seed": 42,
+  "training_seeds": [42],
+  "manifest_sha256": {
+    "M0": "302de3ba37274698ce7a800856d333d451eab3d7b948de523f0ea95f8fa1345b",
+    "M1": "8a4df48173a2bf3002ad9b193cac3b585b8eff83475525aeeaf2b418fa5e50fc",
+    "M2": "1d9229dfdbf135750efa524fef5c99f4b45384ec591f2af054f1727acec72423",
+    "M3": "76bbff689f4354f27ed567688da40e59a077f60fc2b74c106ea676f0e8c9fddb",
+    "M4": "0a68d95208bbfdc8a25dfc9cc0ebfb777208463489a3f9b0a55cd85ea724248e",
+    "M5": "f59befef4fd22396eb0782f7b1cd17ba93b00b1ee126b2409b7f3b2bd96fdf8a",
+    "M6": "563c4b8394d378c0b37075adb4ab56e1f17437202e5aed076dac9c71a7fcc2ec",
+    "M7": "210461d98f9435c70369df5ee73ea0cd41d82949b520c2311586f2e1e9758a78"
+  },
+  "test_manifest_sha256": "b45746e8da221062819422c2a9e762e26c18686dc3700bec44fa4e05eeed0290",
+  "preprocessing": {
+    "name": "canonical256_jpegmixed_letterbox299",
+    "source_decode": "Pillow decode followed by RGB conversion",
+    "train_only_augmentation": "random horizontal flip p=0.5 followed by uniformly sampled JPEG quality",
+    "canonical_size": 256,
+    "canonical_resize": "aspect-preserving bicubic letterbox with antialiasing",
+    "canonical_padding_fill_rgb": [128, 128, 128],
+    "train_jpeg_qualities": [75, 80, 85, 90, 95],
+    "train_jpeg_sampling": "uniform",
+    "validation_jpeg_quality": 95,
+    "jpeg_subsampling": 2,
+    "jpeg_optimize": false,
+    "jpeg_progressive": false,
+    "model_input_size": 299,
+    "normalization_mean": [0.5, 0.5, 0.5],
+    "normalization_std": [0.5, 0.5, 0.5]
+  },
+  "evaluation_conditions": [
+    {
+      "name": "native_original",
+      "canonical_size": null,
+      "jpeg_quality": null,
+      "primary": false
+    },
+    {
+      "name": "canonical_256_png",
+      "canonical_size": 256,
+      "jpeg_quality": null,
+      "primary": false
+    },
+    {
+      "name": "canonical_256_jpeg_q95",
+      "canonical_size": 256,
+      "jpeg_quality": 95,
+      "primary": true
+    },
+    {
+      "name": "canonical_256_jpeg_q90",
+      "canonical_size": 256,
+      "jpeg_quality": 90,
+      "primary": false
+    },
+    {
+      "name": "canonical_256_jpeg_q75",
+      "canonical_size": 256,
+      "jpeg_quality": 75,
+      "primary": false
+    }
+  ],
+  "model_selection": {
+    "validation_condition": "canonical_256_jpeg_q95",
+    "metric": "validation ROC-AUC",
+    "reason": "Preserves direct checkpoint-selection comparability with the fixed-Q95 control."
+  },
+  "reuse": {
+    "M5_seed42": "Reuse the completed run with the identical run name and preprocessing protocol.",
+    "M7_seed42": "Reuse the completed run with the identical run name and preprocessing protocol."
+  },
+  "source_images_modified": false,
+  "legacy_checkpoints_overwritten": false
+}
