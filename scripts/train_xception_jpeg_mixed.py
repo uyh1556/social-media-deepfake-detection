@@ -10,6 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import torch
+
 from train_xception_family_coverage import (
     FIXED_BUDGETS,
     load_condition,
@@ -55,7 +57,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--patience", type=int, default=3)
-    parser.add_argument("--seed", type=int, choices=[42, 43, 44], required=True)
+    seed_group = parser.add_mutually_exclusive_group(required=True)
+    seed_group.add_argument("--seed", type=int, choices=[42, 43, 44])
+    seed_group.add_argument(
+        "--seeds",
+        nargs="+",
+        type=int,
+        choices=[42, 43, 44],
+        help="Run multiple training seeds sequentially and stop on failure.",
+    )
     return parser.parse_args()
 
 
@@ -98,6 +108,53 @@ def run_name(condition_id: str, condition: dict, seed: int) -> str:
     )
 
 
+def completed_run(
+    last_checkpoint: Path,
+    best_checkpoint: Path,
+    *,
+    condition_name: str,
+    seed: int,
+    epochs: int,
+    patience: int,
+    manifest_sha256: str,
+    preprocessing: dict,
+) -> bool:
+    """Return True only when an existing run reached a terminal state."""
+    if not last_checkpoint.is_file() or not best_checkpoint.is_file():
+        return False
+    checkpoint = torch.load(
+        last_checkpoint, map_location="cpu", weights_only=False
+    )
+    config = checkpoint.get("config", {})
+    expected_condition = f"{condition_name}_jpeg_mixed"
+    if config.get("experiment_family") != EXPERIMENT_FAMILY:
+        raise ValueError(f"Unexpected existing run: {last_checkpoint}")
+    if config.get("condition_name") != expected_condition:
+        raise ValueError(f"Condition mismatch in {last_checkpoint}")
+    if int(config.get("seed")) != seed:
+        raise ValueError(f"Seed mismatch in {last_checkpoint}")
+    if config.get("manifest_sha256") != manifest_sha256:
+        raise ValueError(f"Manifest mismatch in {last_checkpoint}")
+    saved = config.get("preprocessing", {})
+    for key in [
+        "canonical_size",
+        "train_jpeg_qualities",
+        "train_jpeg_sampling",
+        "validation_jpeg_quality",
+        "jpeg_subsampling",
+        "jpeg_optimize",
+        "jpeg_progressive",
+    ]:
+        if saved.get(key) != preprocessing.get(key):
+            raise ValueError(
+                f"Preprocessing mismatch for {key} in {last_checkpoint}"
+            )
+    return (
+        int(checkpoint["epoch"]) >= epochs
+        or int(checkpoint.get("epochs_without_improvement", 0)) >= patience
+    )
+
+
 def main() -> None:
     args = parse_args()
     args.data_root = args.data_root.resolve()
@@ -105,7 +162,14 @@ def main() -> None:
     args.output_root = args.output_root.resolve()
     conditions_config = args.conditions_config.resolve()
     mixed_config = args.mixed_config.resolve()
-    protocol = load_protocol(mixed_config, args.condition, args.seed)
+    seeds = args.seeds if args.seeds is not None else [args.seed]
+    if len(seeds) != len(set(seeds)):
+        raise ValueError("Training seeds must be unique.")
+    protocols = {
+        seed: load_protocol(mixed_config, args.condition, seed)
+        for seed in seeds
+    }
+    protocol = protocols[seeds[0]]
     family_protocol, condition = load_condition(
         conditions_config, args.condition
     )
@@ -124,70 +188,112 @@ def main() -> None:
     if not args.data_root.is_dir():
         raise FileNotFoundError(args.data_root)
 
-    run_dir = args.output_root / run_name(
-        args.condition, condition, args.seed
-    )
-    last_checkpoint = run_dir / "last.pt"
     preprocessing = protocol["preprocessing"]
     trainer = Path(__file__).resolve().with_name(
         "train_xception_letterbox.py"
     )
-    command = [
-        sys.executable,
-        "-u",
-        str(trainer),
-        "--data-root",
-        str(args.data_root),
-        "--manifest",
-        str(args.manifest),
-        "--output-dir",
-        str(run_dir),
-        "--split-protocol",
-        EXPERIMENT_FAMILY,
-        "--model",
-        "xception",
-        "--epochs",
-        str(args.epochs),
-        "--batch-size",
-        str(args.batch_size),
-        "--workers",
-        str(args.workers),
-        "--learning-rate",
-        str(args.learning_rate),
-        "--weight-decay",
-        str(args.weight_decay),
-        "--patience",
-        str(args.patience),
-        "--seed",
-        str(args.seed),
-        "--experiment-family",
-        EXPERIMENT_FAMILY,
-        "--condition-name",
-        f"{args.condition.lower()}_{condition['name']}_jpeg_mixed",
-        "--canonical-size",
-        str(preprocessing["canonical_size"]),
-        "--jpeg-quality",
-        str(preprocessing["validation_jpeg_quality"]),
-        "--train-jpeg-qualities",
-        *[str(value) for value in preprocessing["train_jpeg_qualities"]],
-        "--jpeg-subsampling",
-        str(preprocessing["jpeg_subsampling"]),
-        "--persistent-progress",
-    ]
-    if preprocessing["jpeg_optimize"]:
-        command.append("--jpeg-optimize")
-    if preprocessing["jpeg_progressive"]:
-        command.append("--jpeg-progressive")
-    if last_checkpoint.is_file():
-        command.extend(["--resume", str(last_checkpoint)])
-        print(f"Resuming {args.condition}/seed{args.seed}: {last_checkpoint}")
-    else:
-        print(
-            f"Starting {args.condition}/seed{args.seed} mixed-JPEG run "
-            "from ImageNet-pretrained Xception"
+    for seed in seeds:
+        seed_protocol = protocols[seed]
+        if seed_protocol != protocol:
+            raise ValueError("Mixed-JPEG protocol changed across seeds.")
+        run_dir = args.output_root / run_name(
+            args.condition, condition, seed
         )
-    print("Run directory:", run_dir, flush=True)
-    subprocess.run(command, check=True)
+        last_checkpoint = run_dir / "last.pt"
+        best_checkpoint = run_dir / "best.pt"
+        if completed_run(
+            last_checkpoint,
+            best_checkpoint,
+            condition_name=f"{args.condition.lower()}_{condition['name']}",
+            seed=seed,
+            epochs=args.epochs,
+            patience=args.patience,
+            manifest_sha256=actual_hash,
+            preprocessing=preprocessing,
+        ):
+            print(
+                f"\n===== {args.condition} / seed {seed} =====",
+                flush=True,
+            )
+            print(
+                f"Skipping completed training: {best_checkpoint}",
+                flush=True,
+            )
+            continue
+        command = [
+            sys.executable,
+            "-u",
+            str(trainer),
+            "--data-root",
+            str(args.data_root),
+            "--manifest",
+            str(args.manifest),
+            "--output-dir",
+            str(run_dir),
+            "--split-protocol",
+            EXPERIMENT_FAMILY,
+            "--model",
+            "xception",
+            "--epochs",
+            str(args.epochs),
+            "--batch-size",
+            str(args.batch_size),
+            "--workers",
+            str(args.workers),
+            "--learning-rate",
+            str(args.learning_rate),
+            "--weight-decay",
+            str(args.weight_decay),
+            "--patience",
+            str(args.patience),
+            "--seed",
+            str(seed),
+            "--experiment-family",
+            EXPERIMENT_FAMILY,
+            "--condition-name",
+            f"{args.condition.lower()}_{condition['name']}_jpeg_mixed",
+            "--canonical-size",
+            str(preprocessing["canonical_size"]),
+            "--jpeg-quality",
+            str(preprocessing["validation_jpeg_quality"]),
+            "--train-jpeg-qualities",
+            *[
+                str(value)
+                for value in preprocessing["train_jpeg_qualities"]
+            ],
+            "--jpeg-subsampling",
+            str(preprocessing["jpeg_subsampling"]),
+            "--persistent-progress",
+        ]
+        if preprocessing["jpeg_optimize"]:
+            command.append("--jpeg-optimize")
+        if preprocessing["jpeg_progressive"]:
+            command.append("--jpeg-progressive")
+        print(f"\n===== {args.condition} / seed {seed} =====", flush=True)
+        if last_checkpoint.is_file():
+            command.extend(["--resume", str(last_checkpoint)])
+            print(
+                f"Resuming {args.condition}/seed{seed}: {last_checkpoint}",
+                flush=True,
+            )
+        else:
+            print(
+                f"Starting {args.condition}/seed{seed} mixed-JPEG run "
+                "from ImageNet-pretrained Xception",
+                flush=True,
+            )
+        print("Run directory:", run_dir, flush=True)
+        subprocess.run(command, check=True)
+        if not best_checkpoint.is_file():
+            raise FileNotFoundError(
+                f"Training ended without best.pt: {best_checkpoint}"
+            )
+
+    print(
+        f"Completed {args.condition} seeds: "
+        + ", ".join(map(str, seeds)),
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

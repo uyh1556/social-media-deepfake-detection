@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import platform
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -76,6 +77,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--training-manifest-dir", type=Path, required=True)
     parser.add_argument("--runs-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument(
+        "--reuse-results-root",
+        type=Path,
+        default=None,
+        help=(
+            "Optional completed evaluation root whose matching per-run "
+            "metrics and predictions are copied instead of recomputed."
+        ),
+    )
     parser.add_argument(
         "--conditions-config",
         type=Path,
@@ -758,6 +768,58 @@ def versions() -> dict[str, str]:
     }
 
 
+def validate_reuse_identity(existing: dict, requested: dict) -> None:
+    """Validate that cached per-seed results belong to this evaluation."""
+    for key in ["protocol", "test_manifest_sha256", "evaluation_conditions"]:
+        if existing.get(key) != requested.get(key):
+            raise RuntimeError(f"Reuse identity mismatch for {key}.")
+    existing_seeds = set(existing.get("training_seeds", []))
+    requested_seeds = set(requested.get("training_seeds", []))
+    if not existing_seeds or not existing_seeds.issubset(requested_seeds):
+        raise RuntimeError("Reuse seeds are not a subset of requested seeds.")
+    existing_models = existing.get("models", {})
+    requested_models = requested.get("models", {})
+    if set(existing_models) != set(requested_models):
+        raise RuntimeError("Reuse model set does not match.")
+    for model_id, existing_model in existing_models.items():
+        requested_model = requested_models[model_id]
+        if existing_model.get("training_manifest_sha256") != (
+            requested_model.get("training_manifest_sha256")
+        ):
+            raise RuntimeError(
+                f"Reuse training manifest mismatch for {model_id}."
+            )
+        existing_checkpoints = existing_model.get("checkpoints", {})
+        requested_checkpoints = requested_model.get("checkpoints", {})
+        if not set(existing_checkpoints).issubset(requested_checkpoints):
+            raise RuntimeError(
+                f"Reuse checkpoint seeds do not match for {model_id}."
+            )
+        for seed, checkpoint in existing_checkpoints.items():
+            if checkpoint != requested_checkpoints[seed]:
+                raise RuntimeError(
+                    f"Reuse checkpoint mismatch for {model_id}/seed{seed}."
+                )
+
+
+def copy_cached_result(source_dir: Path, target_dir: Path) -> bool:
+    """Copy a complete metrics/predictions pair into the new result tree."""
+    source_metrics = source_dir / "metrics.json"
+    source_predictions = source_dir / "predictions.csv"
+    available = [source_metrics.is_file(), source_predictions.is_file()]
+    if not any(available):
+        return False
+    if not all(available):
+        raise RuntimeError(f"Incomplete reusable result: {source_dir}")
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for source in [source_metrics, source_predictions]:
+        target = target_dir / source.name
+        temporary = target.with_suffix(target.suffix + ".tmp")
+        shutil.copy2(source, temporary)
+        temporary.replace(target)
+    return True
+
+
 def main() -> None:
     args = parse_args()
     paths = {
@@ -772,6 +834,13 @@ def main() -> None:
     for name, path in paths.items():
         if name != "output_root" and not path.exists():
             raise FileNotFoundError(path)
+    reuse_results_root = (
+        args.reuse_results_root.resolve()
+        if args.reuse_results_root is not None
+        else None
+    )
+    if reuse_results_root is not None and not reuse_results_root.is_dir():
+        raise FileNotFoundError(reuse_results_root)
     control = load_control(
         paths["control_config"],
         args.training_seeds,
@@ -900,6 +969,17 @@ def main() -> None:
         output_root.mkdir(parents=True, exist_ok=True)
         write_json(identity_path, identity)
 
+    if reuse_results_root is not None:
+        if reuse_results_root == output_root:
+            raise ValueError("Reuse root and output root must be different.")
+        reuse_identity_path = reuse_results_root / "run_identity.json"
+        if not reuse_identity_path.is_file():
+            raise FileNotFoundError(reuse_identity_path)
+        reuse_identity = json.loads(
+            reuse_identity_path.read_text(encoding="utf-8")
+        )
+        validate_reuse_identity(reuse_identity, identity)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if device.type != "cuda":
         raise RuntimeError("A CUDA GPU runtime is required.")
@@ -963,6 +1043,23 @@ def main() -> None:
                 )
                 metrics_path = result_dir / "metrics.json"
                 predictions_path = result_dir / "predictions.csv"
+                if (
+                    reuse_results_root is not None
+                    and not metrics_path.exists()
+                    and not predictions_path.exists()
+                ):
+                    source_dir = (
+                        reuse_results_root
+                        / model_id.lower()
+                        / f"seed{seed}"
+                        / condition_name
+                    )
+                    if copy_cached_result(source_dir, result_dir):
+                        print(
+                            f"Reused completed: {model_id}/seed{seed}/"
+                            f"{condition_name}",
+                            flush=True,
+                        )
                 if metrics_path.is_file() and predictions_path.is_file():
                     result = json.loads(metrics_path.read_text(encoding="utf-8"))
                     if result["test_manifest_sha256"] != test_hash:
