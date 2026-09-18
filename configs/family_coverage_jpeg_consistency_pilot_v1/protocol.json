@@ -1,0 +1,73 @@
+{
+  "protocol": "family_coverage_jpeg_consistency_pilot_v1",
+  "models": ["M7"],
+  "training_manifest_sampling_seed": 42,
+  "training_seeds": [42],
+  "manifest_sha256": {
+    "M7": "210461d98f9435c70369df5ee73ea0cd41d82949b520c2311586f2e1e9758a78"
+  },
+  "test_manifest_sha256": "b45746e8da221062819422c2a9e762e26c18686dc3700bec44fa4e05eeed0290",
+  "preprocessing": {
+    "name": "canonical256_jpegpair_consistency_letterbox299",
+    "source_decode": "Pillow decode followed by RGB conversion",
+    "shared_train_augmentation": "one random horizontal flip p=0.5 shared by both views",
+    "canonical_size": 256,
+    "canonical_resize": "aspect-preserving bicubic letterbox with antialiasing",
+    "canonical_padding_fill_rgb": [128, 128, 128],
+    "train_jpeg_qualities": [75, 80, 85, 90, 95],
+    "paired_quality_sampling": "uniform ordered pair without replacement",
+    "validation_jpeg_quality": 95,
+    "jpeg_subsampling": 2,
+    "jpeg_optimize": false,
+    "jpeg_progressive": false,
+    "model_input_size": 299,
+    "normalization_mean": [0.5, 0.5, 0.5],
+    "normalization_std": [0.5, 0.5, 0.5]
+  },
+  "objective": {
+    "classification": "cross-entropy on one uniformly sampled anchor JPEG view",
+    "second_view_role": "consistency regularization only, without an additional supervised cross-entropy term",
+    "consistency": "Jensen-Shannon divergence between the two class-probability distributions",
+    "consistency_weight": 0.1
+  },
+  "optimization": {
+    "unique_images_per_loader_batch": 8,
+    "paired_views_per_loader_batch": 16,
+    "gradient_accumulation_steps": 2,
+    "effective_unique_images_per_optimizer_step": 16,
+    "reason": "Keep the number of unique images per optimizer update aligned with the batch-16 baseline while fitting two views on a T4-class GPU."
+  },
+  "evaluation_conditions": [
+    {
+      "name": "canonical_256_jpeg_q95",
+      "canonical_size": 256,
+      "jpeg_quality": 95,
+      "primary": true
+    },
+    {
+      "name": "canonical_256_jpeg_q90",
+      "canonical_size": 256,
+      "jpeg_quality": 90,
+      "primary": false
+    },
+    {
+      "name": "canonical_256_jpeg_q75",
+      "canonical_size": 256,
+      "jpeg_quality": 75,
+      "primary": false
+    }
+  ],
+  "model_selection": {
+    "validation_condition": "canonical_256_jpeg_q95",
+    "metric": "validation ROC-AUC",
+    "reason": "Preserve direct checkpoint-selection comparability with the existing M7 Mixed-JPEG baseline."
+  },
+  "baseline_reference": {
+    "protocol": "family_coverage_jpeg_mixed_v1",
+    "model": "M7",
+    "training_seed": 42,
+    "note": "The anchor-view supervised objective matches one-view Mixed-JPEG training. The second view contributes only through consistency, so it does not double supervised label exposure."
+  },
+  "source_images_modified": false,
+  "legacy_checkpoints_overwritten": false
+}
