@@ -37,6 +37,9 @@ from train_xception_jpeg_consistency import (
 
 
 PROTOCOL_NAME = "jpeg_consistency_pilot"
+WILD_EVALUATION_PROTOCOL = (
+    "wilddeepfake_m7_jpeg_consistency_native_letterbox299_v1"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -154,9 +157,7 @@ def main() -> None:
     )
     data_config = checkpoint["config"]["data_config"]
     identity = {
-        "protocol": (
-            "wilddeepfake_m7_jpeg_consistency_native_letterbox299_v1"
-        ),
+        "protocol": WILD_EVALUATION_PROTOCOL,
         "wild_config_sha256": sha256_file(paths["wild_config"]),
         "pilot_config_sha256": sha256_file(paths["pilot_config"]),
         "training_manifest_sha256": expected_training_hash,
@@ -255,7 +256,7 @@ def main() -> None:
             "versions": versions(),
         },
     )
-    print("\n=== WildDeepfake M7 consistency pilot ===", flush=True)
+    print(f"\n=== WildDeepfake {PROTOCOL_NAME} ===", flush=True)
     print(
         summary[
             [
