@@ -1,0 +1,61 @@
+{
+  "protocol": "wilddeepfake_native_letterbox299_sequence_evaluation_v1",
+  "dataset": "WildDeepfake",
+  "source_revision": "f3835aaf281dd9f8d79b51c4e02f050d3f7af0b4",
+  "archive": {
+    "name": "wilddeepfake_test_16frames_v1.tar",
+    "sha256": "03a7afe425c01ef34bae795b43287e0a665b06d8233abf3b197e26afc004fd5a"
+  },
+  "manifest": {
+    "relative_path": "manifest.csv",
+    "sha256": "bccba4a2c2b3f4b1753a76e7b42e356adeb68c3721f1a9383edd8a8d99230d51",
+    "images": 12896,
+    "sequences": 806,
+    "frames_per_sequence": 16,
+    "class_counts_images": {
+      "real": 6336,
+      "fake": 6560
+    },
+    "class_counts_sequences": {
+      "real": 396,
+      "fake": 410
+    }
+  },
+  "selection": {
+    "unit": "source sequence",
+    "policy": "16 deterministic evenly spaced frames including both endpoints",
+    "formula": "floor(i * (N - 1) / (K - 1)), i=0..15",
+    "random_sampling": false
+  },
+  "evaluation": {
+    "primary_unit": "sequence",
+    "sequence_score": "mean fake probability over 16 selected frames",
+    "secondary_unit": "frame",
+    "decision_threshold": 0.5,
+    "threshold_tuned_on_wilddeepfake": false
+  },
+  "model_protocols": {
+    "basic": {
+      "training_protocol": "family_coverage_fixed_budget_v1",
+      "training_seeds": [42],
+      "evaluation_preprocessing": "native_letterbox299",
+      "interpretation": "legacy training protocol evaluated on the native WildDeepfake images"
+    },
+    "fixed_q95": {
+      "training_protocol": "family_coverage_reencoding_control_v1",
+      "training_seeds": [42, 43, 44],
+      "evaluation_preprocessing": "native_letterbox299",
+      "interpretation": "fixed-Q95 training evaluated on the native WildDeepfake images"
+    },
+    "mixed_jpeg": {
+      "training_protocol": "family_coverage_jpeg_mixed_v1",
+      "training_seeds": [42, 43, 44],
+      "evaluation_preprocessing": "native_letterbox299",
+      "interpretation": "mixed-JPEG training evaluated on the native WildDeepfake images"
+    }
+  },
+  "models": ["M0", "M1", "M2", "M3", "M4", "M5", "M6", "M7"],
+  "shared_test_preprocessing": "All three model protocols use RGB conversion, native-image Letterbox 299, tensor conversion, and Xception normalization. No JPEG re-encoding is applied.",
+  "source_images_modified": false,
+  "test_used_for_training_or_tuning": false
+}
