@@ -1,0 +1,84 @@
+{
+  "protocol": "method_transfer_matrix_v1",
+  "training_manifest_sampling_seed": 42,
+  "training_seeds": [42],
+  "source_manifests": {
+    "M1": {
+      "file": "m1_seed42.csv",
+      "sha256": "8a4df48173a2bf3002ad9b193cac3b585b8eff83475525aeeaf2b418fa5e50fc",
+      "methods": ["SimSwap", "BlendFace"]
+    },
+    "M2": {
+      "file": "m2_seed42.csv",
+      "sha256": "1d9229dfdbf135750efa524fef5c99f4b45384ec591f2af054f1727acec72423",
+      "methods": ["Wav2Lip", "FOMM"]
+    },
+    "M3": {
+      "file": "m3_seed42.csv",
+      "sha256": "76bbff689f4354f27ed567688da40e59a077f60fc2b74c106ea676f0e8c9fddb",
+      "methods": ["StyleGAN3", "DiT"]
+    }
+  },
+  "methods": {
+    "SimSwap": {"slug": "simswap", "family": "FS", "source_condition": "M1"},
+    "BlendFace": {"slug": "blendface", "family": "FS", "source_condition": "M1"},
+    "Wav2Lip": {"slug": "wav2lip", "family": "FR", "source_condition": "M2"},
+    "FOMM": {"slug": "fomm", "family": "FR", "source_condition": "M2"},
+    "StyleGAN3": {"slug": "stylegan3", "family": "EFS", "source_condition": "M3"},
+    "DiT": {"slug": "dit", "family": "EFS", "source_condition": "M3"}
+  },
+  "budgets": {
+    "train": {"real": 9900, "fake": 9900},
+    "val": {"real": 2340, "fake": 2340}
+  },
+  "manifest_sha256": {
+    "SimSwap": "dc5fd041caecd4c9e74a2b3e061c53dc94f8ffa0f6f26748cd44bc3c33e0f2fc",
+    "BlendFace": "1e5abf29fba69811ca8ea4f16fda3005d742f1bfc91599300bb93b84a6ff1af7",
+    "Wav2Lip": "39abe6aab3f036a615868ddedeee2bb08bdccd16b27d4af0c4b89d5e50c50cb7",
+    "FOMM": "2dc3fa0188de2ebd93ba50d84498fd1ba0cf74eaa8055947768cacaf34eb5ff4",
+    "StyleGAN3": "5b32aad4d53adfd6acb19cfa2ceabd9dc6d601b926cacfa9884948e376a4473d",
+    "DiT": "907ccd38da1ae45fb3637c7270acec70ebbd38ab59623bdeb498bcecee811623"
+  },
+  "test_manifest_sha256": "b45746e8da221062819422c2a9e762e26c18686dc3700bec44fa4e05eeed0290",
+  "preprocessing": {
+    "name": "canonical256_jpegmixed_letterbox299",
+    "source_decode": "Pillow decode followed by RGB conversion",
+    "train_only_augmentation": "random horizontal flip p=0.5 followed by uniformly sampled JPEG quality",
+    "canonical_size": 256,
+    "canonical_resize": "aspect-preserving bicubic letterbox with antialiasing",
+    "canonical_padding_fill_rgb": [128, 128, 128],
+    "train_jpeg_qualities": [75, 80, 85, 90, 95],
+    "train_jpeg_sampling": "uniform",
+    "validation_jpeg_quality": 95,
+    "jpeg_subsampling": 2,
+    "jpeg_optimize": false,
+    "jpeg_progressive": false,
+    "model_input_size": 299,
+    "normalization_mean": [0.5, 0.5, 0.5],
+    "normalization_std": [0.5, 0.5, 0.5]
+  },
+  "evaluation_methods": [
+    "SimSwap",
+    "BlendFace",
+    "Wav2Lip",
+    "FOMM",
+    "StyleGAN3",
+    "DiT"
+  ],
+  "evaluation_conditions": [
+    {"name": "canonical_256_jpeg_q95", "jpeg_quality": 95, "primary": true},
+    {"name": "canonical_256_jpeg_q90", "jpeg_quality": 90, "primary": false},
+    {"name": "canonical_256_jpeg_q75", "jpeg_quality": 75, "primary": false}
+  ],
+  "model_selection": {
+    "validation_condition": "canonical_256_jpeg_q95",
+    "metric": "validation ROC-AUC"
+  },
+  "selection_boundary": {
+    "protected_unseen_used": false,
+    "wilddeepfake_used": false,
+    "purpose": "training-side cross-method transfer measurement only"
+  },
+  "source_images_modified": false,
+  "legacy_checkpoints_overwritten": false
+}
