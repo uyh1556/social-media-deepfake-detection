@@ -1,0 +1,97 @@
+{
+  "protocol": "method_selection_nested_holdout_v1",
+  "parent_transfer_protocol": "method_transfer_matrix_v1",
+  "sampling_seed": 42,
+  "training_seeds": [42],
+  "methods": {
+    "SimSwap": {"slug": "simswap", "family": "FS", "source_condition": "M1"},
+    "BlendFace": {"slug": "blendface", "family": "FS", "source_condition": "M1"},
+    "Wav2Lip": {"slug": "wav2lip", "family": "FR", "source_condition": "M2"},
+    "FOMM": {"slug": "fomm", "family": "FR", "source_condition": "M2"},
+    "StyleGAN3": {"slug": "stylegan3", "family": "EFS", "source_condition": "M3"},
+    "DiT": {"slug": "dit", "family": "EFS", "source_condition": "M3"}
+  },
+  "source_manifests": {
+    "M1": {
+      "file": "m1_seed42.csv",
+      "sha256": "8a4df48173a2bf3002ad9b193cac3b585b8eff83475525aeeaf2b418fa5e50fc",
+      "methods": ["SimSwap", "BlendFace"]
+    },
+    "M2": {
+      "file": "m2_seed42.csv",
+      "sha256": "1d9229dfdbf135750efa524fef5c99f4b45384ec591f2af054f1727acec72423",
+      "methods": ["Wav2Lip", "FOMM"]
+    },
+    "M3": {
+      "file": "m3_seed42.csv",
+      "sha256": "76bbff689f4354f27ed567688da40e59a077f60fc2b74c106ea676f0e8c9fddb",
+      "methods": ["StyleGAN3", "DiT"]
+    }
+  },
+  "fixed_budgets": {
+    "train": {"real": 19800, "fake": 19800},
+    "val": {"real": 4680, "fake": 4680}
+  },
+  "strategies": {
+    "random3": {
+      "label": "Deterministic random 3",
+      "selection_size": 3,
+      "uses_transfer_matrix": false
+    },
+    "family_balanced3": {
+      "label": "One method per family",
+      "selection_size": 3,
+      "uses_transfer_matrix": false
+    },
+    "transfer3": {
+      "label": "Proposed transfer-complementary 3",
+      "selection_size": 3,
+      "uses_transfer_matrix": true
+    },
+    "all5": {
+      "label": "All five remaining methods",
+      "selection_size": 5,
+      "uses_transfer_matrix": false
+    }
+  },
+  "transfer_selection": {
+    "conditions": [
+      "canonical_256_jpeg_q95",
+      "canonical_256_jpeg_q90",
+      "canonical_256_jpeg_q75"
+    ],
+    "metric": "roc_auc",
+    "outer_holdout_row_removed": true,
+    "outer_holdout_column_removed": true,
+    "proxy_targets": "remaining candidate methods not selected for training",
+    "target_coverage": "maximum transfer AUC from any selected source method",
+    "primary_objective": "maximize minimum target coverage across proxy targets and JPEG conditions",
+    "secondary_objective": "maximize mean target coverage across proxy targets and JPEG conditions",
+    "tie_break": "more represented families, then lexicographic method tuple"
+  },
+  "preprocessing": {
+    "name": "canonical256_jpegmixed_letterbox299",
+    "canonical_size": 256,
+    "train_jpeg_qualities": [75, 80, 85, 90, 95],
+    "train_jpeg_sampling": "uniform",
+    "validation_jpeg_quality": 95,
+    "jpeg_subsampling": 2,
+    "jpeg_optimize": false,
+    "jpeg_progressive": false,
+    "model_input_size": 299
+  },
+  "evaluation_conditions": [
+    {"name": "canonical_256_jpeg_q95", "jpeg_quality": 95, "primary": true},
+    {"name": "canonical_256_jpeg_q90", "jpeg_quality": 90, "primary": false},
+    {"name": "canonical_256_jpeg_q75", "jpeg_quality": 75, "primary": false}
+  ],
+  "test_manifest_sha256": "b45746e8da221062819422c2a9e762e26c18686dc3700bec44fa4e05eeed0290",
+  "selection_boundary": {
+    "outer_method_used_during_selection": false,
+    "protected_unseen_used": false,
+    "wilddeepfake_used": false,
+    "purpose": "internal nested holdout validation before freezing a final selection rule"
+  },
+  "source_images_modified": false,
+  "legacy_checkpoints_overwritten": false
+}
