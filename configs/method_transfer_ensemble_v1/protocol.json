@@ -1,0 +1,71 @@
+{
+  "protocol": "method_transfer_ensemble_v1",
+  "parent_transfer_protocol": "method_transfer_matrix_v1",
+  "methods": {
+    "SimSwap": {"slug": "simswap", "family": "FS"},
+    "BlendFace": {"slug": "blendface", "family": "FS"},
+    "Wav2Lip": {"slug": "wav2lip", "family": "FR"},
+    "FOMM": {"slug": "fomm", "family": "FR"},
+    "StyleGAN3": {"slug": "stylegan3", "family": "EFS"},
+    "DiT": {"slug": "dit", "family": "EFS"}
+  },
+  "evaluation_conditions": [
+    "canonical_256_jpeg_q95",
+    "canonical_256_jpeg_q90",
+    "canonical_256_jpeg_q75"
+  ],
+  "strategies": {
+    "uniform5": {
+      "label": "Uniform soft-voting ensemble of the five remaining experts",
+      "formula": "mean expert fake probability"
+    },
+    "transfer_weighted5": {
+      "label": "Transfer-centrality-weighted soft-voting ensemble of the five remaining experts",
+      "formula": "normalized mean max(AUC - 0.5, 0) over the remaining internal targets and all three JPEG conditions"
+    }
+  },
+  "transfer_weighting": {
+    "metric": "roc_auc",
+    "chance_auc": 0.5,
+    "conditions_combined": [
+      "canonical_256_jpeg_q95",
+      "canonical_256_jpeg_q90",
+      "canonical_256_jpeg_q75"
+    ],
+    "outer_holdout_expert_removed": true,
+    "outer_holdout_row_removed": true,
+    "outer_holdout_column_removed": true,
+    "diagonal_removed": true,
+    "same_weights_used_for_all_evaluation_conditions": true
+  },
+  "evaluation": {
+    "pair": "2,000 Real plus 2,000 outer-holdout fake images",
+    "expected_images_per_class": 2000,
+    "decision_threshold": 0.5,
+    "primary_condition": "canonical_256_jpeg_q95",
+    "metrics": [
+      "roc_auc",
+      "auprc",
+      "accuracy",
+      "f1",
+      "real_fpr",
+      "fake_recall",
+      "real_mean_fake_score",
+      "fake_mean_fake_score"
+    ]
+  },
+  "advance_criterion": {
+    "description": "Only consider transfer-aware distillation if the weighted ensemble improves Q95 mean AUC over uniform voting, wins at least four of six outer holdouts, and does not materially reduce worst-holdout AUC.",
+    "minimum_q95_wins": 4,
+    "maximum_worst_auc_regression": 0.005
+  },
+  "selection_boundary": {
+    "outer_method_used_to_compute_weights": false,
+    "protected_unseen_used": false,
+    "wilddeepfake_used": false,
+    "new_model_training": false,
+    "purpose": "training-side nested validation of transfer information as an expert-voting prior"
+  },
+  "source_predictions_modified": false,
+  "legacy_results_overwritten": false
+}
