@@ -1,0 +1,35 @@
+{
+  "protocol": "transfer_aware_distillation_external_evaluation_v1",
+  "parent_training_protocol": "transfer_aware_distillation_pilot_v1",
+  "models": ["m7_mixed", "uniform_kd", "transfer_kd"],
+  "training_seed": 42,
+  "df40_test_manifest_sha256": "b45746e8da221062819422c2a9e762e26c18686dc3700bec44fa4e05eeed0290",
+  "df40_evaluation_conditions": [
+    {"name": "canonical_256_jpeg_q95", "jpeg_quality": 95, "primary": true},
+    {"name": "canonical_256_jpeg_q90", "jpeg_quality": 90, "primary": false},
+    {"name": "canonical_256_jpeg_q75", "jpeg_quality": 75, "primary": false}
+  ],
+  "protected_unseen_methods": [
+    "FaceDancer",
+    "InSwapper",
+    "SadTalker",
+    "HyperReenact",
+    "StyleGAN-XL",
+    "PixArt-alpha"
+  ],
+  "wilddeepfake_evaluation": {
+    "training_or_tuning": false,
+    "input": "native RGB decode -> Letterbox 299 -> Normalize",
+    "primary_unit": "sequence",
+    "sequence_score": "mean fake probability over 16 fixed frames",
+    "decision_threshold": 0.5
+  },
+  "interpretation": {
+    "status": "exploratory post-hoc scope extension",
+    "reason": "the frozen seen-method internal comparison was saturated and did not satisfy its pre-declared advance rule",
+    "models_or_hyperparameters_changed_after_internal_result": false,
+    "future_tuning_from_these_results": false
+  },
+  "source_images_modified": false,
+  "checkpoints_overwritten": false
+}
