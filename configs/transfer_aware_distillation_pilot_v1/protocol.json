@@ -1,0 +1,81 @@
+{
+  "protocol": "transfer_aware_distillation_pilot_v1",
+  "student_condition": "M7",
+  "training_seeds": [42],
+  "manifest_sha256": "210461d98f9435c70369df5ee73ea0cd41d82949b520c2311586f2e1e9758a78",
+  "test_manifest_sha256": "b45746e8da221062819422c2a9e762e26c18686dc3700bec44fa4e05eeed0290",
+  "methods": {
+    "SimSwap": {"slug": "simswap", "family": "FS"},
+    "BlendFace": {"slug": "blendface", "family": "FS"},
+    "Wav2Lip": {"slug": "wav2lip", "family": "FR"},
+    "FOMM": {"slug": "fomm", "family": "FR"},
+    "StyleGAN3": {"slug": "stylegan3", "family": "EFS"},
+    "DiT": {"slug": "dit", "family": "EFS"}
+  },
+  "teacher_cache": {
+    "source_split": "train",
+    "source_label": "fake",
+    "teacher_input_condition": "canonical_256_jpeg_q95",
+    "self_expert_excluded": true,
+    "real_samples_receive_kd": false,
+    "uniform_teacher": "arithmetic mean fake probability from the five non-self experts",
+    "transfer_teacher": "weighted arithmetic mean fake probability from the five non-self experts",
+    "target_probability_clip": [0.001, 0.999]
+  },
+  "transfer_weighting": {
+    "source": "method_transfer_matrix_v1/transfer_matrix_long.csv",
+    "conditions": [
+      "canonical_256_jpeg_q95",
+      "canonical_256_jpeg_q90",
+      "canonical_256_jpeg_q75"
+    ],
+    "metric": "roc_auc",
+    "utility": "mean max(source-to-target AUC - 0.5, 0) across the three JPEG conditions",
+    "normalization": "normalize over the five non-self experts for each target method",
+    "diagonal_excluded": true,
+    "protected_unseen_used": false,
+    "wilddeepfake_used": false
+  },
+  "strategies": {
+    "uniform_kd": {
+      "teacher_target": "uniform_teacher_fake_probability"
+    },
+    "transfer_kd": {
+      "teacher_target": "transfer_teacher_fake_probability"
+    }
+  },
+  "objective": {
+    "classification": "class-weighted cross-entropy on every Real/Fake training sample",
+    "distillation": "binary cross-entropy between the student fake logit and the cached soft fake probability, applied only to fake samples",
+    "distillation_weight": 0.1
+  },
+  "preprocessing": {
+    "name": "canonical256_jpegmixed_transferkd_letterbox299",
+    "canonical_size": 256,
+    "train_jpeg_qualities": [75, 80, 85, 90, 95],
+    "train_jpeg_sampling": "uniform",
+    "validation_jpeg_quality": 95,
+    "jpeg_subsampling": 2,
+    "jpeg_optimize": false,
+    "jpeg_progressive": false,
+    "model_input_size": 299
+  },
+  "evaluation_conditions": [
+    {"name": "canonical_256_jpeg_q95", "jpeg_quality": 95, "primary": true},
+    {"name": "canonical_256_jpeg_q90", "jpeg_quality": 90, "primary": false},
+    {"name": "canonical_256_jpeg_q75", "jpeg_quality": 75, "primary": false}
+  ],
+  "internal_evaluation": {
+    "methods": ["SimSwap", "BlendFace", "Wav2Lip", "FOMM", "StyleGAN3", "DiT"],
+    "models": ["m7_mixed", "uniform_kd", "transfer_kd"],
+    "purpose": "exploratory training-side comparison only; transfer weights were derived from these seen methods"
+  },
+  "selection_boundary": {
+    "protected_unseen_used": false,
+    "wilddeepfake_used": false,
+    "hyperparameter_tuning_from_final_sets": false,
+    "advance_rule": "Do not evaluate final sets unless transfer_kd clearly exceeds uniform_kd on the frozen internal comparison without a material worst-method regression."
+  },
+  "source_images_modified": false,
+  "legacy_checkpoints_overwritten": false
+}
