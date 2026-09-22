@@ -1,0 +1,40 @@
+{
+  "protocol": "jpeg_feature_leakage_probe_v1",
+  "purpose": "Measure whether JPEG quality remains linearly readable from frozen Xception representations before considering another quality-removal loss.",
+  "data_scope": "M7 validation split only",
+  "manifest_sha256": "210461d98f9435c70369df5ee73ea0cd41d82949b520c2311586f2e1e9758a78",
+  "detectors": [
+    "M7 fixed-Q95 seed42",
+    "M7 Mixed-JPEG seed42"
+  ],
+  "protected_unseen_used": false,
+  "wilddeepfake_used": false,
+  "preprocessing": {
+    "source_decode": "Pillow decode followed by RGB conversion",
+    "canonical_size": 256,
+    "canonical_resize": "aspect-preserving bicubic letterbox with antialiasing",
+    "canonical_padding_fill_rgb": [128, 128, 128],
+    "jpeg_qualities": [75, 80, 85, 90, 95],
+    "jpeg_subsampling": 2,
+    "jpeg_optimize": false,
+    "jpeg_progressive": false,
+    "model_input_size": 299,
+    "horizontal_flip": false
+  },
+  "linear_probe": {
+    "feature": "Xception global-pooled representation",
+    "normalization": "per-feature-vector L2 normalization",
+    "classifier": "linear SGD logistic regression with L2 penalty and averaged weights",
+    "source_disjoint_group_column": "group_id",
+    "test_size": 0.3,
+    "seeds": [42, 43, 44],
+    "subsets": ["all", "real", "fake"],
+    "chance_accuracy": 0.2
+  },
+  "detector_score_analysis": {
+    "groups": ["model", "label", "jpeg_quality"],
+    "statistics": ["count", "mean", "median", "standard_deviation"]
+  },
+  "checkpoint_weights_modified": false,
+  "source_images_modified": false
+}
