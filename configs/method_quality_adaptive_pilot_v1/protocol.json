@@ -1,0 +1,80 @@
+{
+  "protocol": "method_quality_adaptive_pilot_v1",
+  "models": ["M7"],
+  "training_manifest_sampling_seed": 42,
+  "training_seeds": [42],
+  "manifest_sha256": {
+    "M7": "210461d98f9435c70369df5ee73ea0cd41d82949b520c2311586f2e1e9758a78"
+  },
+  "test_manifest_sha256": "b45746e8da221062819422c2a9e762e26c18686dc3700bec44fa4e05eeed0290",
+  "preprocessing": {
+    "name": "canonical256_jpegmixed_methodquality_adaptive_letterbox299",
+    "source_decode": "Pillow decode followed by RGB conversion",
+    "train_only_augmentation": "random horizontal flip p=0.5 followed by one uniformly sampled JPEG quality",
+    "canonical_size": 256,
+    "canonical_resize": "aspect-preserving bicubic letterbox with antialiasing",
+    "canonical_padding_fill_rgb": [128, 128, 128],
+    "train_jpeg_qualities": [75, 80, 85, 90, 95],
+    "train_jpeg_sampling": "uniform",
+    "validation_jpeg_quality": 95,
+    "jpeg_subsampling": 2,
+    "jpeg_optimize": false,
+    "jpeg_progressive": false,
+    "model_input_size": 299,
+    "normalization_mean": [0.5, 0.5, 0.5],
+    "normalization_std": [0.5, 0.5, 0.5]
+  },
+  "objective": {
+    "groups": "Real or one of six seen fake methods crossed with JPEG quality Q75/Q80/Q85/Q90/Q95",
+    "fake_methods": ["SimSwap", "BlendFace", "Wav2Lip", "FOMM", "StyleGAN3", "DiT"],
+    "reference_quality": 95,
+    "excess_loss": "max(EMA loss(method, quality) - EMA loss(method, Q95), 0)",
+    "ema_beta": 0.9,
+    "minimum_group_observations": 16,
+    "softmax_temperature": 0.25,
+    "uniform_objective_fraction": 0.5,
+    "maximum_group_weight_multiplier": 3.0,
+    "class_mass": "Real and Fake retain equal expected objective mass; adaptation occurs separately within each label",
+    "weight_update": "online after each batch for use by the next batch",
+    "classification": "single-view weighted cross-entropy; no consistency, distillation, or second supervised view"
+  },
+  "optimization": {
+    "images_per_loader_batch": 16,
+    "views_per_image": 1,
+    "epoch_sampling": "all 39600 unique training images once per epoch with the frozen 50:50 Real/Fake marginal",
+    "comparison_budget": "same unique-image count and one-view forward-pass count as M7 Mixed-JPEG"
+  },
+  "evaluation_conditions": [
+    {
+      "name": "canonical_256_jpeg_q95",
+      "canonical_size": 256,
+      "jpeg_quality": 95,
+      "primary": true
+    },
+    {
+      "name": "canonical_256_jpeg_q90",
+      "canonical_size": 256,
+      "jpeg_quality": 90,
+      "primary": false
+    },
+    {
+      "name": "canonical_256_jpeg_q75",
+      "canonical_size": 256,
+      "jpeg_quality": 75,
+      "primary": false
+    }
+  ],
+  "model_selection": {
+    "validation_condition": "canonical_256_jpeg_q95",
+    "metric": "validation ROC-AUC",
+    "reason": "Keep checkpoint selection directly comparable with M7 Mixed-JPEG; method-quality weights use training batches only."
+  },
+  "baseline_references": [
+    "M7 Mixed-JPEG seed 42",
+    "M7 paired-JPEG consistency seed 42",
+    "M7 family Group DRO plus paired-JPEG consistency seed 42"
+  ],
+  "development_unseen_is_final_holdout": false,
+  "source_images_modified": false,
+  "legacy_checkpoints_overwritten": false
+}
