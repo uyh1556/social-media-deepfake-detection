@@ -65,17 +65,24 @@ def main() -> None:
     prep = config["preprocessing"]
     trainer = Path(__file__).resolve().with_name("train_xception_letterbox.py")
     for model in args.models:
+        print(
+            f"\n===== Preparing {args.selection} / {model} / "
+            f"{args.protocol} =====",
+            flush=True,
+        )
         methods = fake_methods(config, args.selection, model)
         manifest = (
             args.manifest_root / args.selection.lower() / f"{model.lower()}_seed42.csv"
         )
         frame = validate_manifest(manifest, methods, FIXED_BUDGETS)
+        print(f"Manifest validated: {manifest}", flush=True)
         missing = [
             value for value in frame["source_path"]
             if not (args.data_root / value).is_file()
         ]
         if missing:
             raise FileNotFoundError(f"First missing image: {missing[0]}")
+        print(f"Image paths verified: {len(frame)}", flush=True)
 
         model_name = config["models"][model]["name"]
         run_name = (
@@ -84,7 +91,7 @@ def main() -> None:
         )
         run_dir = args.output_root / run_name
         last, best = run_dir / "last.pt", run_dir / "best.pt"
-        print(f"\n===== {args.selection} / {model} / {args.protocol} =====", flush=True)
+        print(f"===== Training {args.selection} / {model} / {args.protocol} =====", flush=True)
         if completed(last, best, args.epochs, args.patience):
             print(f"Skipping completed run: {best}", flush=True)
             continue
