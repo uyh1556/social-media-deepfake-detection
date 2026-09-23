@@ -51,21 +51,28 @@ def main() -> None:
     }
 
     with zipfile.ZipFile(args.archive) as archive:
-        members: dict[tuple[str, str], zipfile.ZipInfo] = {}
-        ff_pngs = 0
-        ignored_non_ff = 0
+        members: dict[tuple[str, str], tuple[int, zipfile.ZipInfo]] = {}
+        matched_pngs = 0
+        ignored_pngs = 0
         for info in archive.infolist():
             path = Path(info.filename)
             if info.is_dir() or path.suffix.lower() != ".png":
                 continue
-            if "ff" not in path.parts:
-                ignored_non_ff += 1
-                continue
-            ff_pngs += 1
             key = (path.parent.name.removeprefix("temp_"), path.name)
-            if key in members:
-                raise RuntimeError(f"Duplicate FF ZIP member: {key}")
-            members[key] = info
+            if key not in expected:
+                ignored_pngs += 1
+                continue
+            matched_pngs += 1
+            # Train archives contain both ff/ and cdf/. Test archives for the
+            # 31 known methods often omit the explicit ff/ directory. Prefer
+            # an explicit FF member, then a domain-neutral member, and never
+            # select CDF when an FF copy exists.
+            rank = 0 if "ff" in path.parts else (2 if "cdf" in path.parts else 1)
+            previous = members.get(key)
+            if previous is None or rank < previous[0]:
+                members[key] = (rank, info)
+            elif rank == previous[0]:
+                raise RuntimeError(f"Duplicate equally ranked ZIP member: {key}")
 
         missing = expected - set(members)
         if missing:
@@ -80,7 +87,7 @@ def main() -> None:
             destination.parent.mkdir(parents=True, exist_ok=True)
             if destination.exists():
                 raise FileExistsError(destination)
-            with archive.open(members[(video_id, filename)]) as source:
+            with archive.open(members[(video_id, filename)][1]) as source:
                 with destination.open("wb") as target:
                     shutil.copyfileobj(source, target, length=1024 * 1024)
             if index % 500 == 0:
@@ -91,9 +98,9 @@ def main() -> None:
             {
                 "split": args.split,
                 "json_images": len(expected),
-                "archive_ff_images": ff_pngs,
+                "archive_matching_images": matched_pngs,
                 "extracted": len(expected),
-                "ignored_non_ff_images": ignored_non_ff,
+                "ignored_images": ignored_pngs,
             },
             indent=2,
         )

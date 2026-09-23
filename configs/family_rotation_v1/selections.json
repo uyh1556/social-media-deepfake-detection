@@ -1,0 +1,38 @@
+{
+  "protocol": "family_rotation_fixed_budget_v1",
+  "sampling_seed": 42,
+  "budgets": {
+    "train": {"real": 19800, "fake": 19800},
+    "val": {"real": 4680, "fake": 4680}
+  },
+  "families": {
+    "FS": {"a": "SimSwap", "b": "BlendFace", "c": "InSwapper", "d": "FaceDancer", "e": "FSGAN", "f": "e4s"},
+    "FR": {"a": "Wav2Lip", "b": "FOMM", "c": "SadTalker", "d": "HyperReenact", "e": "TPSM", "f": "PIRender"},
+    "EFS": {"a": "StyleGAN3", "b": "DiT", "c": "StyleGAN-XL", "d": "PixArt-alpha", "e": "VQGAN", "f": "SD2.1"}
+  },
+  "selections": {
+    "S1": ["a", "b"],
+    "S2": ["b", "c"],
+    "S3": ["c", "d"],
+    "S4": ["d", "e"],
+    "S5": ["e", "f"],
+    "S6": ["f", "a"]
+  },
+  "models": {
+    "M1": {"name": "fs", "families": ["FS"]},
+    "M2": {"name": "fr", "families": ["FR"]},
+    "M3": {"name": "efs", "families": ["EFS"]},
+    "M4": {"name": "fs_fr", "families": ["FS", "FR"]},
+    "M5": {"name": "fs_efs", "families": ["FS", "EFS"]},
+    "M6": {"name": "fr_efs", "families": ["FR", "EFS"]},
+    "M7": {"name": "fs_fr_efs", "families": ["FS", "FR", "EFS"]}
+  },
+  "preprocessing": {
+    "canonical_size": 256,
+    "jpeg_subsampling": 2,
+    "fixed_q95": 95,
+    "mixed_train_qualities": [75, 80, 85, 90, 95],
+    "mixed_validation_quality": 95,
+    "model_input_size": 299
+  }
+}

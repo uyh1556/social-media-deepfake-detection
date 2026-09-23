@@ -14,6 +14,7 @@ import pandas as pd
 
 
 SPLITS = ("train", "val", "test")
+PROTOCOL_NAME = "family_coverage_global_source_aware_v1"
 METHODS = {
     "simswap": ("SimSwap", "FS", "seen", "pair"),
     "blendface": ("BlendFace", "FS", "seen", "pair"),
@@ -629,7 +630,13 @@ def deduplicate_global_content(
     rows: list[dict],
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """Keep each decoded file payload once across all methods and paths."""
-    role_priority = {"protected_unseen": 0, "seen": 1, "baseline_seen": 2, "real": 3}
+    role_priority = {
+        "protected_unseen": 0,
+        "rotation_candidate": 1,
+        "seen": 1,
+        "baseline_seen": 2,
+        "real": 3,
+    }
     by_hash: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
         by_hash[row["content_sha256"]].append(row)
@@ -880,7 +887,7 @@ def main() -> None:
         frame[(frame["split"] == "test") & (frame["label"] == "fake")]["method"].unique()
     )
     summary = {
-        "protocol": "family_coverage_global_source_aware_v1",
+        "protocol": PROTOCOL_NAME,
         "domain": "ff_only",
         "anchor_manifest": str(anchor),
         "anchor_manifest_sha256": sha256_file(anchor),
