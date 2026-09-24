@@ -138,7 +138,7 @@ def main() -> None:
         ignore_index=True,
     )
     counts = test.groupby("method").size()
-    if len(test) != 42000 or len(counts) != 21 or set(counts) != {
+    if len(test) != 42000 or len(counts) != 21 or set(counts.index) != {
         "original", "Deepfakes", "Face2Face", *config["families"]["FS"].values(),
         *config["families"]["FR"].values(), *config["families"]["EFS"].values(),
     } or set(counts.tolist()) != {2000}:
