@@ -51,17 +51,31 @@ def load_protocol(path: Path) -> dict:
     if not path.is_file():
         raise FileNotFoundError(path)
     protocol = json.loads(path.read_text(encoding="utf-8"))
-    if protocol.get("protocol") != PROTOCOL:
-        raise ValueError(f"Unexpected protocol: {protocol.get('protocol')}")
+    if not protocol.get("protocol"):
+        raise ValueError(f"Missing protocol name in {path}")
     return protocol
 
 
-def run_name(method: str, definition: dict, seed: int) -> str:
+def run_name(method: str, definition: dict, seed: int, protocol: dict) -> str:
+    template = protocol.get("run_name_template")
+    if template:
+        return template.format(
+            method=method,
+            slug=definition["slug"],
+            seed=seed,
+        )
     return (
         f"xception_method_transfer_{definition['slug']}_"
         "canonical256_jpegmix75_80_85_90_95_letterbox299_v1_"
         f"seed{seed}"
     )
+
+
+def condition_name(method: str, definition: dict, protocol: dict) -> str:
+    template = protocol.get("condition_name_template")
+    if template:
+        return template.format(method=method, slug=definition["slug"])
+    return f"method_transfer_{definition['slug']}_jpeg_mixed"
 
 
 def validate_manifest(
@@ -117,13 +131,16 @@ def completed_run(
     epochs: int,
     patience: int,
     manifest_hash: str,
+    protocol: dict,
+    definition: dict,
 ) -> bool:
     if not last_checkpoint.is_file() or not best_checkpoint.is_file():
         return False
     checkpoint = torch.load(last_checkpoint, map_location="cpu", weights_only=False)
     config = checkpoint.get("config", {})
-    expected_condition = f"method_transfer_{method.lower()}_jpeg_mixed"
-    if config.get("experiment_family") != PROTOCOL:
+    expected_condition = condition_name(method, definition, protocol)
+    protocol_name = protocol["protocol"]
+    if config.get("experiment_family") != protocol_name:
         raise ValueError(f"Unexpected existing run: {last_checkpoint}")
     if config.get("condition_name") != expected_condition:
         raise ValueError(f"Condition mismatch in {last_checkpoint}")
@@ -174,18 +191,20 @@ def main() -> None:
 
     preprocessing = protocol["preprocessing"]
     run_dir = paths["output_root"] / run_name(
-        args.method, definition, args.seed
+        args.method, definition, args.seed, protocol
     )
     last_checkpoint = run_dir / "last.pt"
     best_checkpoint = run_dir / "best.pt"
     if completed_run(
         last_checkpoint,
         best_checkpoint,
-        method=definition["slug"],
+        method=args.method,
         seed=args.seed,
         epochs=args.epochs,
         patience=args.patience,
         manifest_hash=manifest_hash,
+        protocol=protocol,
+        definition=definition,
     ):
         print("Skipping completed training:", best_checkpoint, flush=True)
         return
@@ -202,7 +221,7 @@ def main() -> None:
         "--output-dir",
         str(run_dir),
         "--split-protocol",
-        PROTOCOL,
+        protocol["protocol"],
         "--model",
         "xception",
         "--epochs",
@@ -220,9 +239,9 @@ def main() -> None:
         "--seed",
         str(args.seed),
         "--experiment-family",
-        PROTOCOL,
+        protocol["protocol"],
         "--condition-name",
-        f"method_transfer_{definition['slug']}_jpeg_mixed",
+        condition_name(args.method, definition, protocol),
         "--canonical-size",
         str(preprocessing["canonical_size"]),
         "--jpeg-quality",

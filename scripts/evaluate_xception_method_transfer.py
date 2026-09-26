@@ -27,7 +27,6 @@ from evaluate_checkpoint import EvaluationDataset, evaluate_with_predictions
 from evaluate_xception_family_coverage import (
     cross_split_audit,
     read_manifest,
-    validate_test_manifest,
 )
 from train_baseline import sha256_file, write_json
 from xception_preprocessing import (
@@ -38,6 +37,34 @@ from xception_preprocessing import (
 
 PROTOCOL = "method_transfer_matrix_v1"
 EXPECTED_IMAGES_PER_METHOD = 2_000
+
+
+def validate_transfer_test_manifest(
+    frame: pd.DataFrame,
+    selected_methods: set[str],
+    expected_per_method: int,
+) -> None:
+    required = {
+        "sample_id", "split", "label", "method", "family", "role",
+        "group_id", "video_id", "source_ids", "driver_id",
+        "content_sha256", "source_path",
+    }
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"Test manifest columns missing: {sorted(missing)}")
+    if set(frame["split"]) != {"test"}:
+        raise ValueError("Transfer evaluation requires test rows only")
+    selected = frame[
+        (frame["method"] == "original")
+        | frame["method"].isin(selected_methods)
+    ]
+    counts = selected.groupby("method").size().to_dict()
+    expected = {"original", *selected_methods}
+    if set(counts) != expected or set(counts.values()) != {expected_per_method}:
+        raise RuntimeError(f"Unexpected transfer test counts: {counts}")
+    for column in ("sample_id", "source_path", "content_sha256"):
+        if selected[column].duplicated().any():
+            raise RuntimeError(f"Duplicate selected test {column}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -71,8 +98,8 @@ def load_protocol(path: Path, selected_conditions: list[str]) -> dict:
     if not path.is_file():
         raise FileNotFoundError(path)
     protocol = json.loads(path.read_text(encoding="utf-8"))
-    if protocol.get("protocol") != PROTOCOL:
-        raise ValueError(f"Unexpected protocol: {protocol.get('protocol')}")
+    if not protocol.get("protocol"):
+        raise ValueError(f"Missing protocol name in {path}")
     configured = [item["name"] for item in protocol["evaluation_conditions"]]
     if not selected_conditions or len(selected_conditions) != len(
         set(selected_conditions)
@@ -86,12 +113,22 @@ def load_protocol(path: Path, selected_conditions: list[str]) -> dict:
     return protocol
 
 
-def run_name(method: str, definition: dict, seed: int) -> str:
+def run_name(method: str, definition: dict, seed: int, protocol: dict) -> str:
+    template = protocol.get("run_name_template")
+    if template:
+        return template.format(method=method, slug=definition["slug"], seed=seed)
     return (
         f"xception_method_transfer_{definition['slug']}_"
         "canonical256_jpegmix75_80_85_90_95_letterbox299_v1_"
         f"seed{seed}"
     )
+
+
+def condition_name(method: str, definition: dict, protocol: dict) -> str:
+    template = protocol.get("condition_name_template")
+    if template:
+        return template.format(method=method, slug=definition["slug"])
+    return f"method_transfer_{definition['slug']}_jpeg_mixed"
 
 
 def metrics_from_arrays(
@@ -169,13 +206,12 @@ def validate_checkpoint(
         raise ValueError(f"Evaluation requires best.pt: {checkpoint_path}")
     if checkpoint["model_name"] not in {"xception", "legacy_xception"}:
         raise ValueError(f"Unexpected model in {checkpoint_path}")
-    if config.get("experiment_family") != PROTOCOL:
+    protocol_name = protocol["protocol"]
+    if config.get("experiment_family") != protocol_name:
         raise ValueError(f"Unexpected experiment family in {checkpoint_path}")
-    if config.get("split_protocol") != PROTOCOL:
+    if config.get("split_protocol") != protocol_name:
         raise ValueError(f"Unexpected split protocol in {checkpoint_path}")
-    if config.get("condition_name") != (
-        f"method_transfer_{definition['slug']}_jpeg_mixed"
-    ):
+    if config.get("condition_name") != condition_name(method, definition, protocol):
         raise ValueError(f"Checkpoint condition mismatch: {checkpoint_path}")
     if config.get("preprocessing_name") != MIXED_JPEG_REENCODE_NAME:
         raise ValueError(f"Unexpected preprocessing in {checkpoint_path}")
@@ -184,7 +220,8 @@ def validate_checkpoint(
         raise ValueError(f"Training manifest protocol mismatch for {method}")
     if config.get("manifest_sha256") != manifest_hash:
         raise ValueError(f"Checkpoint/manifest mismatch for {method}")
-    if int(config.get("seed")) != 42:
+    training_seed = int(protocol.get("training_seeds", [42])[0])
+    if int(config.get("seed")) != training_seed:
         raise ValueError(f"Unexpected training seed for {method}")
     saved = config.get("preprocessing", {})
     expected = protocol["preprocessing"]
@@ -310,7 +347,6 @@ def main() -> None:
         paths["protocol_config"], args.evaluation_conditions
     )
     full_test = read_manifest(paths["test_manifest"])
-    validate_test_manifest(full_test)
     test_hash = sha256_file(paths["test_manifest"])
     if test_hash != protocol["test_manifest_sha256"]:
         raise ValueError(
@@ -318,14 +354,20 @@ def main() -> None:
             f"{protocol['test_manifest_sha256']}, actual={test_hash}"
         )
     selected_methods = set(protocol["evaluation_methods"])
+    expected_per_method = int(
+        protocol.get("expected_images_per_method", EXPECTED_IMAGES_PER_METHOD)
+    )
+    validate_transfer_test_manifest(
+        full_test, selected_methods, expected_per_method
+    )
     test_frame = full_test[
         (full_test["method"] == "original")
         | (full_test["method"].isin(selected_methods))
     ].copy().reset_index(drop=True)
-    expected_rows = EXPECTED_IMAGES_PER_METHOD * (len(selected_methods) + 1)
+    expected_rows = expected_per_method * (len(selected_methods) + 1)
     counts = test_frame.groupby("method").size().to_dict()
     if len(test_frame) != expected_rows or set(counts.values()) != {
-        EXPECTED_IMAGES_PER_METHOD
+        expected_per_method
     }:
         raise RuntimeError(f"Unexpected transfer test counts: {counts}")
     test_frame["source_reference_path"] = test_frame["source_path"]
@@ -345,7 +387,7 @@ def main() -> None:
     audits = {}
     reference_data_config = None
     identity = {
-        "protocol": PROTOCOL,
+        "protocol": protocol["protocol"],
         "protocol_config_sha256": sha256_file(paths["protocol_config"]),
         "test_manifest_sha256": test_hash,
         "evaluation_methods": protocol["evaluation_methods"],
@@ -363,7 +405,7 @@ def main() -> None:
         audits[method] = cross_split_audit(development, full_test)
         checkpoint_path = (
             paths["runs_root"]
-            / run_name(method, definition, 42)
+            / run_name(method, definition, 42, protocol)
             / "best.pt"
         )
         if not checkpoint_path.is_file():
@@ -601,7 +643,7 @@ def main() -> None:
     write_json(
         output_root / "evaluation_summary.json",
         {
-            "protocol": PROTOCOL,
+            "protocol": protocol["protocol"],
             "training_methods": protocol["evaluation_methods"],
             "evaluation_methods": protocol["evaluation_methods"],
             "evaluation_conditions": args.evaluation_conditions,
