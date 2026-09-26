@@ -108,8 +108,22 @@ def load_protocol(path: Path, selected_conditions: list[str]) -> dict:
     unknown = set(selected_conditions) - set(configured)
     if unknown:
         raise ValueError(f"Unknown evaluation conditions: {sorted(unknown)}")
-    if list(protocol["methods"]) != protocol["evaluation_methods"]:
-        raise ValueError("Method order differs between training and evaluation")
+    training_methods = list(protocol["methods"])
+    evaluation_methods = protocol["evaluation_methods"]
+    if len(evaluation_methods) != len(set(evaluation_methods)):
+        raise ValueError("Evaluation methods must be unique")
+    if set(training_methods) != set(evaluation_methods):
+        missing_from_evaluation = sorted(
+            set(training_methods) - set(evaluation_methods)
+        )
+        missing_from_training = sorted(
+            set(evaluation_methods) - set(training_methods)
+        )
+        raise ValueError(
+            "Training/evaluation method membership differs: "
+            f"missing_from_evaluation={missing_from_evaluation}, "
+            f"missing_from_training={missing_from_training}"
+        )
     return protocol
 
 
