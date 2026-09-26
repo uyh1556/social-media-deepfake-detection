@@ -205,10 +205,33 @@ def main():
     if not args.data_root.is_dir():
         raise FileNotFoundError(args.data_root)
     if args.output_dir.exists() and any(args.output_dir.iterdir()) and not args.resume:
-        raise FileExistsError(
-            f"Output directory is not empty: {args.output_dir}. "
-            "Choose a new run directory or pass --resume."
-        )
+        existing_names = {path.name for path in args.output_dir.iterdir()}
+        config_path = args.output_dir / "config.json"
+        recoverable_precheckpoint = existing_names == {"config.json"}
+        if recoverable_precheckpoint:
+            existing_config = json.loads(config_path.read_text(encoding="utf-8"))
+            expected_manifest_hash = sha256_file(args.manifest)
+            identity_matches = (
+                existing_config.get("manifest_sha256") == expected_manifest_hash
+                and int(existing_config.get("seed", -1)) == args.seed
+                and existing_config.get("split_protocol") == args.split_protocol
+                and existing_config.get("experiment_family") == args.experiment_family
+                and existing_config.get("condition_name") == args.condition_name
+            )
+            if not identity_matches:
+                raise RuntimeError(
+                    f"Pre-checkpoint config does not match this run: {config_path}"
+                )
+            print(
+                "Recovering run interrupted before the first checkpoint:",
+                args.output_dir,
+                flush=True,
+            )
+        else:
+            raise FileExistsError(
+                f"Output directory is not empty: {args.output_dir}. "
+                "Choose a new run directory or pass --resume."
+            )
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     set_seed(args.seed)
