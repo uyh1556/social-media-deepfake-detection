@@ -11,6 +11,7 @@ import sklearn
 import timm
 import torch
 import torchvision
+import torch.nn.functional as nn_functional
 from PIL import features
 from torch import nn
 from torch.utils.data import DataLoader
@@ -105,7 +106,44 @@ def parse_args():
     parser.add_argument("--jpeg-subsampling", type=int, default=2)
     parser.add_argument("--jpeg-optimize", action="store_true")
     parser.add_argument("--jpeg-progressive", action="store_true")
+    parser.add_argument(
+        "--method-loss-weights-json", type=Path, default=None,
+        help="Optional JSON mapping fake method names to positive loss weights.",
+    )
     return parser.parse_args()
+
+
+def train_one_epoch_method_weighted(
+    model, loader, class_weights, method_weights, optimizer, scaler, device,
+    *, persistent_progress=False,
+):
+    from tqdm.auto import tqdm
+    model.train()
+    total_loss = total_correct = total_samples = 0
+    progress = tqdm(loader, desc="Train", leave=persistent_progress, dynamic_ncols=True)
+    for batch in progress:
+        images = batch["image"].to(device, non_blocking=True)
+        labels = batch["label"].to(device, non_blocking=True)
+        sample_weights = torch.tensor(
+            [method_weights.get(method, 1.0) for method in batch["method"]],
+            dtype=torch.float32, device=device,
+        )
+        optimizer.zero_grad(set_to_none=True)
+        with torch.autocast(device_type=device.type, dtype=torch.float16, enabled=True):
+            logits = model(images)
+            losses = nn_functional.cross_entropy(
+                logits, labels, weight=class_weights, reduction="none"
+            )
+            loss = (losses * sample_weights).sum() / sample_weights.sum()
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        size = labels.size(0)
+        total_loss += loss.item() * size
+        total_correct += (logits.argmax(1) == labels).sum().item()
+        total_samples += size
+        progress.set_postfix(loss=f"{loss.item():.4f}")
+    return {"loss": total_loss / total_samples, "accuracy": total_correct / total_samples}
 
 
 def make_loaders(train_frame, val_frame, data_root, data_config, args):
@@ -165,6 +203,8 @@ def main():
     args.output_dir = args.output_dir.resolve()
     if args.resume is not None:
         args.resume = args.resume.resolve()
+    if args.method_loss_weights_json is not None:
+        args.method_loss_weights_json = args.method_loss_weights_json.resolve()
     if args.model not in {"xception", "legacy_xception"}:
         raise ValueError("This ablation is restricted to Xception.")
     controlled_reencode = args.canonical_size is not None
@@ -241,6 +281,21 @@ def main():
     manifest, train_frame, val_frame = load_and_validate_manifest(
         args.manifest, args.data_root
     )
+    method_loss_weights = None
+    if args.method_loss_weights_json is not None:
+        if not args.method_loss_weights_json.is_file():
+            raise FileNotFoundError(args.method_loss_weights_json)
+        payload = json.loads(args.method_loss_weights_json.read_text(encoding="utf-8"))
+        method_loss_weights = payload.get("weights", payload)
+        fake_methods = set(train_frame.loc[train_frame["label"] == "fake", "method"])
+        if set(method_loss_weights) != fake_methods:
+            raise ValueError(
+                "Method-loss weight membership mismatch: "
+                f"expected={sorted(fake_methods)}, got={sorted(method_loss_weights)}"
+            )
+        method_loss_weights = {k: float(v) for k, v in method_loss_weights.items()}
+        if any(not np.isfinite(v) or v <= 0 for v in method_loss_weights.values()):
+            raise ValueError("Method-loss weights must be finite and positive")
     class_counts, class_weights = calculate_class_weights(train_frame)
     weight_tensor = None
     if not args.unweighted_loss:
@@ -335,6 +390,7 @@ def main():
         "preprocessing_name": preprocessing_name,
         "preprocessing": preprocessing,
         "manifest_sha256": sha256_file(args.manifest),
+        "method_loss_weights": method_loss_weights,
         "label_map": LABEL_MAP,
         "class_counts": {
             "real": int(class_counts[LABEL_MAP["real"]]),
@@ -411,15 +467,17 @@ def main():
     print("Validation distribution:", Counter(val_frame["label"]))
     for epoch in range(start_epoch, args.epochs + 1):
         print(f"\nEpoch {epoch}/{args.epochs}")
-        train_metrics = train_one_epoch(
-            model,
-            train_loader,
-            criterion,
-            optimizer,
-            scaler,
-            device,
-            persistent_progress=args.persistent_progress,
-        )
+        if method_loss_weights is None:
+            train_metrics = train_one_epoch(
+                model, train_loader, criterion, optimizer, scaler, device,
+                persistent_progress=args.persistent_progress,
+            )
+        else:
+            train_metrics = train_one_epoch_method_weighted(
+                model, train_loader, weight_tensor, method_loss_weights,
+                optimizer, scaler, device,
+                persistent_progress=args.persistent_progress,
+            )
         val_metrics = evaluate(
             model,
             val_loader,

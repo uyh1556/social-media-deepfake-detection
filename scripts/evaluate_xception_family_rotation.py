@@ -21,7 +21,7 @@ from xception_preprocessing import LETTERBOX_NAME, evaluation_transform_from_che
 
 
 MODELS = tuple(f"M{i}" for i in range(1, 8))
-PROTOCOLS = ("fixed_q95", "mixed_jpeg")
+PROTOCOLS = ("fixed_q95", "mixed_jpeg", "transfer_weighted")
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,6 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rotation-runs-root", type=Path, required=True)
     parser.add_argument("--s1-fixed-runs-root", type=Path, required=True)
     parser.add_argument("--s1-mixed-runs-root", type=Path, required=True)
+    parser.add_argument("--weighted-runs-root", type=Path, default=None)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument(
         "--config", type=Path,
@@ -70,6 +71,16 @@ def checkpoint_path(
     args: argparse.Namespace, config: dict, protocol: str, model: str
 ) -> Path:
     name = config["models"][model]["name"]
+    if protocol == "transfer_weighted":
+        if model != "M7":
+            raise ValueError("transfer_weighted evaluation is restricted to M7")
+        if args.weighted_runs_root is None:
+            raise ValueError("--weighted-runs-root is required")
+        run = (
+            f"xception_{args.selection.lower()}_m7_"
+            f"transfer_loss_weighted_mixed_jpeg_v1_seed{args.seed}"
+        )
+        return args.weighted_runs_root / run / "best.pt"
     if args.selection == "S1":
         if protocol == "fixed_q95":
             run = (
