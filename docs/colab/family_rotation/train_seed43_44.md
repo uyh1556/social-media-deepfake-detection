@@ -40,7 +40,7 @@ RUNS_ROOT=ROOT/'runs/family_rotation_v1'
 ## Cell 3 — 필요한 Real 및 6개 method TAR만 압축 해제
 
 ```python
-import json, sys
+import json, shutil, sys
 sys.path.insert(0,'/content/project/scripts')
 from create_family_rotation_method_archives import METHOD_SLUGS
 
@@ -53,10 +53,31 @@ archives=[DRIVE_DATA/'real_trainval_v1.tar']+[
 for archive in archives:
     assert archive.is_file(), archive
     marker=Path('/content')/f'.seed_repeats_{archive.name}.done'
-    if not marker.exists():
-        print('Extracting:',archive.name,flush=True)
-        subprocess.run(['tar','-xf',str(archive),'-C','/content'],check=True)
+    if marker.exists():
+        print('Already extracted:',archive.name,flush=True)
+        continue
+
+    # Drive 마운트에서 tar를 직접 읽으면 간헐적으로 exit status 2가 발생한다.
+    # 한 개씩 Colab 로컬 디스크로 복사한 뒤 풀고 임시 복사본을 제거한다.
+    local_archive=Path('/content')/archive.name
+    print('Copying to local disk:',archive.name,flush=True)
+    if local_archive.exists():
+        local_archive.unlink()
+    shutil.copyfile(archive,local_archive)
+    assert local_archive.stat().st_size == archive.stat().st_size, archive
+    try:
+        print('Extracting locally:',archive.name,flush=True)
+        result=subprocess.run(
+            ['tar','-xf',str(local_archive),'-C','/content'],
+            text=True,capture_output=True,
+        )
+        if result.returncode != 0:
+            print(result.stdout)
+            print(result.stderr)
+            raise RuntimeError(f'tar failed: {archive.name}')
         marker.touch()
+    finally:
+        local_archive.unlink(missing_ok=True)
 print(SELECTION,methods)
 ```
 
