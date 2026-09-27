@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train one S2-S6 selection's M1-M7 under fixed-Q95 or Mixed-JPEG."""
+"""Train one S1-S6 selection's M1-M7 under fixed-Q95 or Mixed-JPEG."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ MODELS = tuple(f"M{i}" for i in range(1, 8))
 def parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--selection", choices=[f"S{i}" for i in range(2, 7)], required=True)
+    parser.add_argument("--selection", choices=[f"S{i}" for i in range(1, 7)], required=True)
     parser.add_argument("--protocol", choices=("fixed_q95", "mixed_jpeg"), required=True)
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--manifest-root", type=Path, required=True)
