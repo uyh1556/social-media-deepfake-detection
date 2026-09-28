@@ -23,6 +23,7 @@ def parse_args():
     p.add_argument("--config", type=Path, default=root / "configs/family_rotation_v1/selections.json")
     p.add_argument("--diagnostic-config", type=Path, default=root / "configs/family_rotation_corruption_diagnostic_v1/protocol.json")
     p.add_argument("--full-validation", action="store_true", help="Use every validation row instead of the frozen 1200-image subset")
+    p.add_argument("--available-paths", type=Path, help="Recorded TAR-available validation paths per selection; never changes the training manifest")
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--workers", type=int, default=2)
     return p.parse_args()
@@ -181,7 +182,12 @@ def main():
             raise RuntimeError(f"Checkpoint/manifest/seed mismatch: {checkpoint_file}")
         if saved["preprocessing_name"] != MIXED_JPEG_REENCODE_NAME or checkpoint["label_map"] != {"real": 0, "fake": 1}:
             raise RuntimeError(f"Unexpected checkpoint preprocessing or labels: {checkpoint_file}")
-        frame = select_validation(training, methods, protocol, args.full_validation)
+        eligible = training
+        if args.available_paths:
+            availability = json.loads(args.available_paths.read_text())
+            allowed = set(availability[selection])
+            eligible = training[training.source_path.isin(allowed)].copy()
+        frame = select_validation(eligible, methods, protocol, args.full_validation)
         frame["resolved_path"] = frame["source_path"]
         frame["source_reference_path"] = frame["source_path"]
         missing = [value for value in frame.source_path if not (args.data_root/value).is_file()]
