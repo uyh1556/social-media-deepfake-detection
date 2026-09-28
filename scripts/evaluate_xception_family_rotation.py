@@ -7,7 +7,6 @@ import argparse
 import json
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import timm
 import torch
@@ -17,6 +16,7 @@ from torch.utils.data import DataLoader
 from evaluate_checkpoint import EvaluationDataset, evaluate_with_predictions, write_predictions
 from evaluate_xception_family_coverage import cross_split_audit
 from train_baseline import sha256_file, write_json
+from summarize_family_rotation_results import SUMMARY_POLICY, selection_scope, summarize_method_rows
 from xception_preprocessing import LETTERBOX_NAME, evaluation_transform_from_checkpoint
 
 
@@ -133,14 +133,10 @@ def method_rows(
     return rows
 
 
-def mean(rows: list[dict], status: str | None = None) -> float:
-    values = [r["roc_auc"] for r in rows if status is None or r["status"] == status]
-    return float(np.mean(values)) if values else float("nan")
-
-
 def main() -> None:
     args = parse_args()
     config = json.loads(args.config.read_text(encoding="utf-8"))
+    selected_methods, common_unseen_methods = selection_scope(config, args.selection)
     test = pd.concat(
         [
             pd.read_csv(args.df40_test_manifest, dtype=str, keep_default_na=False),
@@ -172,10 +168,13 @@ def main() -> None:
             trained = set(methods_for(config, args.selection, model_id))
             training_manifest = manifest_path(args, model_id)
             checkpoint_file = checkpoint_path(args, config, protocol, model_id)
+            print(f"Preparing: {args.selection} {protocol} {model_id} seed{args.seed}", flush=True)
             for path in (training_manifest, checkpoint_file):
                 if not path.is_file():
                     raise FileNotFoundError(path)
             checkpoint = torch.load(checkpoint_file, map_location=device, weights_only=False)
+            if int(checkpoint["config"].get("seed", -1)) != args.seed:
+                raise RuntimeError(f"Checkpoint seed mismatch: {checkpoint_file}")
             if checkpoint["config"].get("manifest_sha256") != sha256_file(training_manifest):
                 raise RuntimeError(f"Checkpoint/manifest mismatch: {checkpoint_file}")
             audit = cross_split_audit(
@@ -187,6 +186,9 @@ def main() -> None:
                 result = json.loads(metrics_path.read_text(encoding="utf-8"))
                 if result["test_manifest_sha256"] != test_hash:
                     raise RuntimeError(f"Existing result used another test set: {out}")
+                if Path(result["checkpoint"]) != checkpoint_file:
+                    raise RuntimeError(f"Existing result used another checkpoint: {out}")
+                print(f"Reusing completed evaluation: {out}", flush=True)
                 metrics = result["metrics"]
             else:
                 if out.exists() and any(out.iterdir()):
@@ -225,16 +227,17 @@ def main() -> None:
                 del network, loader, dataset
                 torch.cuda.empty_cache()
             rows = method_rows(args.selection, protocol, model_id, trained, test, metrics)
+            for row in rows:
+                row["training_seed"] = args.seed
+            summary = summarize_method_rows(rows, config, args.selection)
             all_methods.extend(rows)
             cm = metrics["confusion_matrix"]
             models.append({
                 "selection": args.selection, "protocol": protocol, "model": model_id,
+                "training_seed": args.seed,
                 "trained_methods": "|".join(sorted(trained)),
                 "real_fpr": float(cm[0][1] / sum(cm[0])),
-                "df40_all_macro_auc": mean([r for r in rows if r["status"] != "ffpp_reference"]),
-                "df40_seen_macro_auc": mean(rows, "trained"),
-                "df40_unseen_macro_auc": mean(rows, "unseen"),
-                "ffpp_reference_macro_auc": mean(rows, "ffpp_reference"),
+                **summary,
             })
     pd.DataFrame(models).to_csv(args.output_root / "model_summary.csv", index=False)
     pd.DataFrame(all_methods).to_csv(args.output_root / "method_summary.csv", index=False)
@@ -244,6 +247,11 @@ def main() -> None:
         "test_images": len(test), "groups": 21,
         "models": list(args.models), "training_protocols": list(args.protocols),
         "test_manifest_sha256": test_hash,
+        "summary_policy": SUMMARY_POLICY,
+        "selection_candidate_methods": sorted(selected_methods),
+        "df40_common_unseen_methods": sorted(common_unseen_methods),
+        "df40_common_unseen_method_count": len(common_unseen_methods),
+        "ffpp_in_df40_unseen": False,
     })
 
 
