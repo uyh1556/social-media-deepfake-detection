@@ -1,0 +1,69 @@
+{
+  "protocol": "family_rotation_validation_corruptions_noise_std10",
+  "training_protocol": "mixed_jpeg",
+  "training_seed": 42,
+  "model": "M7",
+  "data_scope": "seen-method validation only",
+  "real_samples": 600,
+  "fake_samples_per_method": 100,
+  "sampling_seed": 42,
+  "noise_seed": 42,
+  "canonical_size": 256,
+  "jpeg_quality": 95,
+  "jpeg_subsampling": 2,
+  "pipeline": "RGB -> Letterbox256 -> one corruption -> JPEG Q95 -> Letterbox299 -> Normalize",
+  "decision_threshold": 0.5,
+  "conditions": [
+    {
+      "name": "original",
+      "kind": "identity",
+      "strength": 0
+    },
+    {
+      "name": "blur_sigma0p5",
+      "kind": "gaussian_blur",
+      "strength": 0.5,
+      "kernel_size": 5
+    },
+    {
+      "name": "blur_sigma1p0",
+      "kind": "gaussian_blur",
+      "strength": 1,
+      "kernel_size": 7
+    },
+    {
+      "name": "resize192",
+      "kind": "downsample_upsample",
+      "strength": 192
+    },
+    {
+      "name": "resize160",
+      "kind": "downsample_upsample",
+      "strength": 160
+    },
+    {
+      "name": "noise_std2",
+      "kind": "gaussian_noise",
+      "strength": 2
+    },
+    {
+      "name": "noise_std5",
+      "kind": "gaussian_noise",
+      "strength": 5
+    },
+    {
+      "name": "noise_std10",
+      "kind": "gaussian_noise",
+      "strength": 10
+    }
+  ],
+  "blur": "separable normalized Gaussian kernel, reflected boundaries, RGB rounding to uint8",
+  "resize": "Pillow bicubic downsample to the configured square then upsample to 256",
+  "noise": "zero-mean independent RGB Gaussian noise in 0-255 units; same standard-normal field per sample at std2/std5/std10; round and clip to uint8",
+  "unseen_used": false,
+  "wilddeepfake_used": false,
+  "source_images_modified": false,
+  "checkpoint_updated": false,
+  "noise_std10_scope": "evaluation-only out-of-training-range stress test; training maximum remains 5"
+}
+
