@@ -21,6 +21,7 @@ def main() -> None:
     parser.add_argument("--wild-config", type=Path, default=root / "configs/wilddeepfake_evaluation_v1/protocol.json")
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--workers", type=int, default=2)
+    parser.add_argument("--noise-max-std", type=int, choices=[2, 5], default=2)
     args = parser.parse_args()
     if len(args.selections) != len(set(args.selections)):
         parser.error("Selections must not contain duplicates")
@@ -54,7 +55,7 @@ def main() -> None:
         training_hash = sha256_file(training_manifest)
         checkpoint_path = (
             args.pilot_runs_root
-            / f"xception_{selection.lower()}_m7_mixed_jpeg_noise_p25_std2_seed42"
+            / f"xception_{selection.lower()}_m7_mixed_jpeg_noise_p25_std{args.noise_max_std}_seed42"
             / "best.pt"
         )
         if not checkpoint_path.is_file():
@@ -64,7 +65,7 @@ def main() -> None:
         if saved.get("manifest_sha256") != training_hash or int(saved.get("seed", -1)) != 42:
             raise RuntimeError(f"Checkpoint/manifest/seed mismatch: {checkpoint_path}")
         noise = saved.get("preprocessing", {}).get("train_noise", {})
-        if noise.get("probability") != 0.25 or noise.get("max_std_0_to_255") != 2.0:
+        if noise.get("probability") != 0.25 or noise.get("max_std_0_to_255") != args.noise_max_std:
             raise RuntimeError(f"Not the frozen weak-noise pilot: {checkpoint_path}")
         if checkpoint.get("label_map") != {"real": 0, "fake": 1}:
             raise RuntimeError(f"Unexpected label map: {checkpoint_path}")
@@ -94,7 +95,7 @@ def main() -> None:
         )
         row = summary_row(
             "mixed_jpeg_noise_pilot", "M7",
-            {"name": f"{selection.lower()}_m7_mixed_jpeg_noise_p25_std2"},
+            {"name": f"{selection.lower()}_m7_mixed_jpeg_noise_p25_std{args.noise_max_std}"},
             42, "native_letterbox299", frames, sequences,
         )
         row["selection"] = selection

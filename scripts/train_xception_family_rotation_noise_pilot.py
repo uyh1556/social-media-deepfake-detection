@@ -27,6 +27,7 @@ def main():
     p.add_argument("--learning-rate", type=float, default=1e-4)
     p.add_argument("--weight-decay", type=float, default=1e-4)
     p.add_argument("--patience", type=int, default=3)
+    p.add_argument("--noise-max-std", type=int, choices=[2, 5], default=2)
     args = p.parse_args()
     config = json.loads(args.config.read_text())
     trainer = root / "scripts/train_xception_letterbox.py"
@@ -36,8 +37,18 @@ def main():
         missing = [path for path in frame.source_path if not (args.data_root / path).is_file()]
         if missing:
             raise FileNotFoundError(f"{selection}: {len(missing)} training/validation images missing; first: {missing[0]}")
-        run = args.output_root / f"xception_{selection.lower()}_m7_mixed_jpeg_noise_p25_std2_seed42"
+        condition = f"{selection.lower()}_m7_mixed_jpeg_noise_p25_std{args.noise_max_std}"
+        run = args.output_root / f"xception_{condition}_seed42"
         last, best = run / "last.pt", run / "best.pt"
+        if (run / "config.json").is_file():
+            saved = json.loads((run / "config.json").read_text())
+            import hashlib
+            noise = saved.get("preprocessing", {}).get("train_noise", {})
+            if (saved.get("manifest_sha256") != hashlib.sha256(manifest.read_bytes()).hexdigest()
+                    or int(saved.get("seed", -1)) != 42
+                    or noise.get("probability") != 0.25
+                    or noise.get("max_std_0_to_255") != args.noise_max_std):
+                raise RuntimeError(f"Existing pilot configuration mismatch: {run}")
         print(f"\n===== {selection} / M7 / Mixed-JPEG + noise =====", flush=True)
         if completed(last, best, args.epochs, args.patience):
             print(f"Already complete: {best}", flush=True)
@@ -49,10 +60,10 @@ def main():
             "--workers", str(args.workers), "--learning-rate", str(args.learning_rate),
             "--weight-decay", str(args.weight_decay), "--patience", str(args.patience),
             "--seed", "42", "--experiment-family", "family_rotation_noise_pilot_v1",
-            "--condition-name", f"{selection.lower()}_m7_mixed_jpeg_noise_p25_std2",
+            "--condition-name", condition,
             "--canonical-size", "256", "--jpeg-quality", "95", "--jpeg-subsampling", "2",
             "--train-jpeg-qualities", "75", "80", "85", "90", "95",
-            "--train-noise-probability", "0.25", "--train-noise-max-std", "2.0", "--persistent-progress"]
+            "--train-noise-probability", "0.25", "--train-noise-max-std", str(args.noise_max_std), "--persistent-progress"]
         if last.is_file():
             command.extend(["--resume", str(last)])
             print(f"Resuming: {last}", flush=True)

@@ -25,6 +25,7 @@ def parse_args():
     p.add_argument("--full-validation", action="store_true", help="Use every validation row instead of the frozen 1200-image subset")
     p.add_argument("--available-paths", type=Path, help="Recorded TAR-available validation paths per selection; never changes the training manifest")
     p.add_argument("--pilot-runs-root", type=Path, help="Use noise-augmentation pilot checkpoints instead of original M7")
+    p.add_argument("--pilot-noise-max-std", type=int, choices=[2, 5], default=2)
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--workers", type=int, default=2)
     return p.parse_args()
@@ -176,11 +177,15 @@ def main():
         manifest = manifest_path(args, "M7")
         checkpoint_file = checkpoint_path(args, config, "mixed_jpeg", "M7")
         if args.pilot_runs_root is not None:
-            checkpoint_file = args.pilot_runs_root / f"xception_{selection.lower()}_m7_mixed_jpeg_noise_p25_std2_seed42" / "best.pt"
+            checkpoint_file = args.pilot_runs_root / f"xception_{selection.lower()}_m7_mixed_jpeg_noise_p25_std{args.pilot_noise_max_std}_seed42" / "best.pt"
         print(f"Preparing {selection}: {checkpoint_file}", flush=True)
         training = pd.read_csv(manifest, dtype=str, keep_default_na=False)
         checkpoint = torch.load(checkpoint_file, map_location="cpu", weights_only=False)
         saved = checkpoint["config"]
+        if args.pilot_runs_root is not None:
+            noise = saved.get("preprocessing", {}).get("train_noise", {})
+            if noise.get("probability") != 0.25 or noise.get("max_std_0_to_255") != args.pilot_noise_max_std:
+                raise RuntimeError(f"Pilot noise configuration mismatch: {checkpoint_file}")
         if saved["manifest_sha256"] != sha256_file(manifest) or int(saved["seed"]) != 42:
             raise RuntimeError(f"Checkpoint/manifest/seed mismatch: {checkpoint_file}")
         if saved["preprocessing_name"] != MIXED_JPEG_REENCODE_NAME or checkpoint["label_map"] != {"real": 0, "fake": 1}:
