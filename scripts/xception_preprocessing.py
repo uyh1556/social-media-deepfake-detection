@@ -2,6 +2,8 @@ import io
 import random
 from pathlib import Path
 
+import numpy as np
+
 import timm
 from PIL import Image
 from torchvision import transforms
@@ -23,6 +25,29 @@ FACE_ROI_REQUIRED_COLUMNS = {
     "roi_side_width_fraction",
     "roi_side_height_fraction",
 }
+
+
+class RandomGaussianNoise:
+    """Apply label-independent RGB noise on a canonical uint8 PIL image."""
+
+    def __init__(self, probability=0.25, max_std=2.0):
+        if not 0 <= probability <= 1 or max_std <= 0:
+            raise ValueError("Noise probability must be 0-1 and max_std positive")
+        self.probability = float(probability)
+        self.max_std = float(max_std)
+
+    def __call__(self, image):
+        if not isinstance(image, Image.Image) or image.mode != "RGB":
+            raise TypeError("RandomGaussianNoise expects an RGB PIL image")
+        if random.random() >= self.probability:
+            return image
+        strength = random.uniform(0, self.max_std)
+        array = np.asarray(image, dtype=np.float32)
+        noise = np.random.normal(0.0, strength, array.shape)
+        return Image.fromarray(np.clip(np.rint(array + noise), 0, 255).astype(np.uint8), "RGB")
+
+    def __repr__(self):
+        return f"RandomGaussianNoise(probability={self.probability}, max_std={self.max_std})"
 
 
 class Letterbox:

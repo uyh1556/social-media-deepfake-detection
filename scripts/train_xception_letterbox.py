@@ -37,6 +37,7 @@ from xception_preprocessing import (
     LETTERBOX_FILL_RGB,
     LETTERBOX_NAME,
     MIXED_JPEG_REENCODE_NAME,
+    RandomGaussianNoise,
     canonical_mixed_reencode_transforms,
     canonical_reencode_transforms,
     letterbox_transforms,
@@ -106,6 +107,8 @@ def parse_args():
     parser.add_argument("--jpeg-subsampling", type=int, default=2)
     parser.add_argument("--jpeg-optimize", action="store_true")
     parser.add_argument("--jpeg-progressive", action="store_true")
+    parser.add_argument("--train-noise-probability", type=float, default=0.0)
+    parser.add_argument("--train-noise-max-std", type=float, default=2.0)
     parser.add_argument(
         "--method-loss-weights-json", type=Path, default=None,
         help="Optional JSON mapping fake method names to positive loss weights.",
@@ -174,6 +177,10 @@ def make_loaders(train_frame, val_frame, data_root, data_config, args):
                 jpeg_progressive=args.jpeg_progressive,
             )
         )
+        if args.train_noise_probability > 0:
+            training_transform.transforms.insert(
+                2, RandomGaussianNoise(args.train_noise_probability, args.train_noise_max_std)
+            )
     train_dataset = FFPPDataset(
         train_frame, data_root, training_transform
     )
@@ -208,6 +215,10 @@ def main():
     if args.model not in {"xception", "legacy_xception"}:
         raise ValueError("This ablation is restricted to Xception.")
     controlled_reencode = args.canonical_size is not None
+    if not 0 <= args.train_noise_probability <= 1 or args.train_noise_max_std <= 0:
+        raise ValueError("Invalid train noise probability or strength")
+    if args.train_noise_probability > 0 and args.train_jpeg_qualities is None:
+        raise ValueError("Pilot noise requires the Mixed-JPEG training pipeline")
     if controlled_reencode != (args.jpeg_quality is not None):
         raise ValueError(
             "--canonical-size and --jpeg-quality must be provided together."
@@ -369,6 +380,14 @@ def main():
                     "validation_jpeg_quality": int(args.jpeg_quality),
                 }
             )
+            preprocessing["train_noise"] = {
+                "probability": args.train_noise_probability,
+                "max_std_0_to_255": args.train_noise_max_std,
+                "strength_sampling": "uniform(0,max_std) when applied",
+                "position": "after Letterbox256, before JPEG",
+                "label_independent": True,
+                "validation_noise": False,
+            }
         else:
             preprocessing["jpeg_quality"] = int(args.jpeg_quality)
     else:
