@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Create fixed-budget S1-S6/M1-M7 train-validation manifests."""
+"""Create new fixed-budget S1-S6/M1-M7 train-validation manifests.
+
+Do not use regenerated CSVs to replace the frozen three-seed checkpoint
+manifests. Their exact bytes are in the family-rotation evaluation TAR.
+"""
 
 from __future__ import annotations
 
