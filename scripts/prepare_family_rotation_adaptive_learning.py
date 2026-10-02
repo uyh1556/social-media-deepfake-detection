@@ -130,7 +130,7 @@ def load_roles(manifest, roles_path, protocol):
     return roles
 
 
-def extract_needed(archive_path, data_root, requested):
+def extract_needed(archive_path, data_root, requested, supplements=()):
     needed = {p for p in requested if not (data_root / p).is_file()}
     if not needed:
         print(f"Already available: {archive_path.name}", flush=True)
@@ -139,34 +139,45 @@ def extract_needed(archive_path, data_root, requested):
         raise FileNotFoundError(archive_path)
     prefix = "deepfake_family_rotation_v1/"
     print(f"Extracting selected images: {archive_path.name} ({len(needed)})", flush=True)
-    with tarfile.open(archive_path, "r:") as archive:
-        for member in archive:
-            name = member.name.removeprefix("./")
-            relative = name.removeprefix(prefix)
-            if member.isfile() and name.startswith(prefix) and relative in needed:
-                if PurePosixPath(relative).is_absolute() or ".." in PurePosixPath(relative).parts:
-                    raise ValueError(f"Unsafe image path: {relative}")
-                destination = data_root / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                temporary = destination.with_name(destination.name + ".tmp")
-                with archive.extractfile(member) as source, temporary.open("wb") as target:
-                    import shutil
-                    shutil.copyfileobj(source, target, 8 * 1024 * 1024)
-                os.replace(temporary, destination)
-                needed.remove(relative)
-                if not needed:
-                    break
+    for source_archive in (archive_path, *supplements):
+        if not needed:
+            break
+        if not source_archive.is_file():
+            if source_archive in supplements:
+                continue
+            raise FileNotFoundError(source_archive)
+        if source_archive != archive_path:
+            print(f"Extracting S1 supplement: {source_archive.name} ({len(needed)})", flush=True)
+        with tarfile.open(source_archive, "r:") as archive:
+            for member in archive:
+                name = member.name.removeprefix("./")
+                relative = name.removeprefix(prefix)
+                if member.isfile() and name.startswith(prefix) and relative in needed:
+                    if PurePosixPath(relative).is_absolute() or ".." in PurePosixPath(relative).parts:
+                        raise ValueError(f"Unsafe image path: {relative}")
+                    destination = data_root / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    temporary = destination.with_name(destination.name + ".tmp")
+                    with archive.extractfile(member) as source, temporary.open("wb") as target:
+                        import shutil
+                        shutil.copyfileobj(source, target, 8 * 1024 * 1024)
+                    os.replace(temporary, destination)
+                    needed.remove(relative)
+                    if not needed:
+                        break
     if needed:
-        raise FileNotFoundError(f"Archive lacks {len(needed)} frozen images: {sorted(needed)[:5]}")
+        hint = f" Upload {supplements[0].name} beside the existing trainval TARs." if supplements else ""
+        raise FileNotFoundError(f"Archive lacks {len(needed)} frozen images: {sorted(needed)[:5]}.{hint}")
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--selections", nargs="+", choices=["S2", "S3", "S4"], default=["S2", "S3", "S4"])
+    p.add_argument("--selections", nargs="+", choices=[f"S{i}" for i in range(1, 7)], default=["S2", "S3", "S4"])
     for name in ("archive-root", "data-root", "manifest-root", "output-root"):
         p.add_argument(f"--{name}", type=Path, required=True)
     p.add_argument("--protocol-config", type=Path, default=ROOT / "configs/family_rotation_adaptive_learning_v1/protocol.json")
     p.add_argument("--test-only", action="store_true", help="Extract only the canonical 21-group test images")
+    p.add_argument("--manifests-only", action="store_true", help="Freeze manifests and roles without training image extraction")
     a = p.parse_args()
     if a.test_only:
         for csv_name, archive_name in (
@@ -218,10 +229,14 @@ def main():
                         for (role, method), count in roles.groupby(["validation_role", "method"]).size().items()]})
             print(selection, roles.groupby("validation_role").size().to_dict(), flush=True)
             frames.append(frame)
+    if a.manifests_only:
+        print("Frozen manifests and validation roles prepared.", flush=True)
+        return
     required = pd.concat(frames).drop_duplicates("source_path")
     for method, part in required.groupby("method"):
         name = "real_trainval_v1.tar" if method == "original" else f"df40_{METHOD_SLUGS[method]}_trainval_v1.tar"
-        extract_needed(a.archive_root / name, a.data_root, set(part.source_path))
+        supplements = (a.archive_root / "df40_simswap_s1_supplement_v1.tar",) if method == "SimSwap" and "S1" in a.selections else ()
+        extract_needed(a.archive_root / name, a.data_root, set(part.source_path), supplements)
     print("All frozen M7 training/validation images prepared; no test archive required.", flush=True)
 
 

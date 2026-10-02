@@ -56,7 +56,7 @@ def save_summary(output, rows, methods, identity):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--selections", nargs="+", choices=["S2", "S3", "S4"], default=["S2", "S3", "S4"])
+    p.add_argument("--selections", nargs="+", choices=[f"S{i}" for i in range(1, 7)], default=["S2", "S3", "S4"])
     p.add_argument("--strategies", nargs="+", choices=STRATEGIES, default=list(STRATEGIES))
     for name in ("data-root", "df40-test-manifest", "ffpp-test-manifest", "manifest-root", "roles-root", "runs-root", "output-root"):
         p.add_argument(f"--{name}", type=Path, required=True)
@@ -65,6 +65,8 @@ def main():
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--workers", type=int, default=2)
     p.add_argument("--check-only", action="store_true")
+    p.add_argument("--reuse-evaluation-roots", nargs="*", type=Path, default=[],
+                   help="Reuse matching completed inference from these directories")
     p.add_argument("--wild-data-root", type=Path)
     p.add_argument("--wild-manifest", type=Path)
     p.add_argument("--wild-only", action="store_true")
@@ -160,12 +162,20 @@ def main():
                 "ffpp_test_sha256": sha(a.ffpp_test_manifest), "selection_config_sha256": sha(a.config),
                 "preprocessing": "fixed_q95", "threshold": 0.5}
             metrics_path = output / "metrics.json"
-            if metrics_path.exists() and (output / "predictions.csv").exists():
+            for previous_root in a.reuse_evaluation_roots:
+                if metrics_path.exists() and (metrics_path.parent / "predictions.csv").is_file():
+                    break
+                candidate = previous_root / selection.lower() / strategy / "q95" / "metrics.json"
+                if candidate.is_file() and candidate.with_name("predictions.csv").is_file():
+                    previous = json.loads(candidate.read_text())
+                    if previous.get("identity") == result_identity:
+                        metrics_path = candidate
+            if metrics_path.exists() and metrics_path.with_name("predictions.csv").exists():
                 result = json.loads(metrics_path.read_text())
                 if result["identity"] != result_identity:
                     raise RuntimeError(f"Completed evaluation identity differs: {output}")
                 metrics = result["metrics"]
-                print("Reusing completed evaluation", flush=True)
+                print("Reusing completed evaluation:", metrics_path.parent, flush=True)
             else:
                 network = timm.create_model(checkpoint["model_name"], pretrained=False, num_classes=2)
                 network.load_state_dict(checkpoint["model_state_dict"])

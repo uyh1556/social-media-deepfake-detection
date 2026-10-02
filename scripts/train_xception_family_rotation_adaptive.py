@@ -12,7 +12,7 @@ from prepare_family_rotation_adaptive_learning import ROOT, STRATEGIES, load_rol
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--selections", nargs="+", choices=["S2", "S3", "S4"], default=["S2", "S3", "S4"])
+    p.add_argument("--selections", nargs="+", choices=[f"S{i}" for i in range(1, 7)], default=["S2", "S3", "S4"])
     p.add_argument("--strategies", nargs="+", choices=STRATEGIES, default=list(STRATEGIES))
     for name in ("data-root", "manifest-root", "roles-root", "output-root"):
         p.add_argument(f"--{name}", type=Path, required=True)
