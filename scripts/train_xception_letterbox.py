@@ -197,7 +197,10 @@ def make_loaders(train_frame, val_frame, data_root, data_config, args):
         "batch_size": args.batch_size,
         "num_workers": args.workers,
         "pin_memory": torch.cuda.is_available(),
-        "persistent_workers": args.workers > 0,
+        # Adaptive runs recreate seeded workers each epoch for resumable augmentation.
+        "persistent_workers": args.workers > 0 and not bool(
+            getattr(args, "adaptive_strategy", None)
+        ),
         "worker_init_fn": seed_worker,
     }
     train_loader = DataLoader(
@@ -352,10 +355,6 @@ def main():
     train_loader, val_loader, train_transform, val_transform = make_loaders(
         train_frame, val_frame, args.data_root, data_config, args
     )
-    if adaptive and args.workers > 0:
-        # Fresh workers every epoch make their seeded augmentation state resumable.
-        train_loader.persistent_workers = False
-        val_loader.persistent_workers = False
     model = model.to(device)
     criterion = nn.CrossEntropyLoss(weight=weight_tensor)
     optimizer = torch.optim.AdamW(
