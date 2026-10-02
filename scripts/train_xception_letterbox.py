@@ -1,6 +1,7 @@
 import argparse
 import json
 import platform
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -113,6 +114,9 @@ def parse_args():
         "--method-loss-weights-json", type=Path, default=None,
         help="Optional JSON mapping fake method names to positive loss weights.",
     )
+    parser.add_argument("--adaptive-strategy", choices=["uniform", "difficulty", "complementarity"], default=None)
+    parser.add_argument("--adaptive-protocol-config", type=Path, default=None)
+    parser.add_argument("--adaptive-validation-roles", type=Path, default=None)
     return parser.parse_args()
 
 
@@ -212,6 +216,16 @@ def main():
         args.resume = args.resume.resolve()
     if args.method_loss_weights_json is not None:
         args.method_loss_weights_json = args.method_loss_weights_json.resolve()
+    adaptive = args.adaptive_strategy is not None
+    if adaptive != (args.adaptive_protocol_config is not None and args.adaptive_validation_roles is not None):
+        raise ValueError("Adaptive strategy requires both protocol config and validation roles")
+    if not adaptive and (args.adaptive_protocol_config or args.adaptive_validation_roles):
+        raise ValueError("Specify --adaptive-strategy with adaptive paths")
+    if adaptive and (args.canonical_size != 256 or args.jpeg_quality != 95 or args.jpeg_subsampling != 2
+                     or args.jpeg_optimize or args.jpeg_progressive or args.train_jpeg_qualities is not None
+                     or args.train_noise_probability != 0 or args.method_loss_weights_json is not None
+                     or args.unweighted_loss):
+        raise ValueError("Adaptive pilot requires standard fixed-Q95 M7 with no static weighting/noise")
     if args.model not in {"xception", "legacy_xception"}:
         raise ValueError("This ablation is restricted to Xception.")
     controlled_reencode = args.canonical_size is not None
@@ -258,7 +272,9 @@ def main():
     if args.output_dir.exists() and any(args.output_dir.iterdir()) and not args.resume:
         existing_names = {path.name for path in args.output_dir.iterdir()}
         config_path = args.output_dir / "config.json"
-        recoverable_precheckpoint = existing_names == {"config.json"}
+        recoverable_precheckpoint = existing_names == {"config.json"} or (
+            adaptive and "config.json" in existing_names and existing_names <= {
+                "config.json", "adaptive_probe_samples.csv", "adaptive_weight_history.csv"})
         if recoverable_precheckpoint:
             existing_config = json.loads(config_path.read_text(encoding="utf-8"))
             expected_manifest_hash = sha256_file(args.manifest)
@@ -292,6 +308,15 @@ def main():
     manifest, train_frame, val_frame = load_and_validate_manifest(
         args.manifest, args.data_root
     )
+    adaptive_protocol = adaptive_roles = None
+    if adaptive:
+        from prepare_family_rotation_adaptive_learning import load_roles
+        adaptive_protocol = json.loads(args.adaptive_protocol_config.read_text())
+        if adaptive_protocol.get("protocol") != "family_rotation_adaptive_learning_v1":
+            raise ValueError("Unexpected adaptive protocol")
+        adaptive_roles = load_roles(args.manifest, args.adaptive_validation_roles, adaptive_protocol)
+        selection_ids = set(adaptive_roles.loc[adaptive_roles.validation_role == "selection", "sample_id"])
+        val_frame = val_frame[val_frame.sample_id.isin(selection_ids)].reset_index(drop=True)
     method_loss_weights = None
     if args.method_loss_weights_json is not None:
         if not args.method_loss_weights_json.is_file():
@@ -327,6 +352,10 @@ def main():
     train_loader, val_loader, train_transform, val_transform = make_loaders(
         train_frame, val_frame, args.data_root, data_config, args
     )
+    if adaptive and args.workers > 0:
+        # Fresh workers every epoch make their seeded augmentation state resumable.
+        train_loader.persistent_workers = False
+        val_loader.persistent_workers = False
     model = model.to(device)
     criterion = nn.CrossEntropyLoss(weight=weight_tensor)
     optimizer = torch.optim.AdamW(
@@ -443,12 +472,38 @@ def main():
             "scikit_learn": sklearn.__version__,
         },
     }
-    write_json(args.output_dir / "config.json", config)
+    controller = None
+    if adaptive:
+        from family_rotation_adaptive_learning import AdaptiveController
+        config["adaptive_learning"] = {
+            "strategy": args.adaptive_strategy, "protocol": adaptive_protocol,
+            "protocol_sha256": sha256_file(args.adaptive_protocol_config),
+            "validation_roles_sha256": sha256_file(args.adaptive_validation_roles),
+            "implementation_sha256": sha256_file(Path(__file__).with_name("family_rotation_adaptive_learning.py")),
+            "trainer_implementation_sha256": sha256_file(Path(__file__)),
+            "meta_validation_images": int(adaptive_roles.validation_role.eq("meta").sum()),
+            "checkpoint_validation_images": len(val_frame),
+        }
+        old_config = args.output_dir / "config.json"
+        if old_config.exists():
+            old = json.loads(old_config.read_text())
+            for key in ("manifest_sha256", "seed", "adaptive_learning", "epochs", "batch_size",
+                        "learning_rate", "weight_decay", "patience", "min_delta", "workers"):
+                if json_ready(old.get(key)) != json_ready(config.get(key)):
+                    raise RuntimeError(f"Adaptive resume configuration differs: {key}")
+    if adaptive:
+        from prepare_family_rotation_adaptive_learning import atomic_json
+        atomic_json(args.output_dir / "config.json", json_ready(config))
+        controller = AdaptiveController(args.adaptive_strategy, adaptive_protocol, train_frame,
+            adaptive_roles, args.data_root, val_transform, args.output_dir, workers=args.workers)
+    else:
+        write_json(args.output_dir / "config.json", config)
 
     history = []
     best_auc = float("-inf")
     epochs_without_improvement = 0
     start_epoch = 1
+    adaptive_elapsed_seconds = 0.0
     if args.resume is not None:
         checkpoint = torch.load(
             args.resume, map_location=device, weights_only=False
@@ -465,6 +520,10 @@ def main():
             )
         if checkpoint["config"].get("manifest_sha256") != config["manifest_sha256"]:
             raise ValueError("Resume manifest does not match.")
+        if adaptive:
+            if json_ready(checkpoint["config"].get("adaptive_learning")) != json_ready(config["adaptive_learning"]):
+                raise ValueError("Resume adaptive strategy/protocol/validation roles differ")
+            controller.load_state_dict(checkpoint["adaptive_state"])
         model.load_state_dict(checkpoint["model_state_dict"])
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
         scaler.load_state_dict(checkpoint["scaler_state_dict"])
@@ -474,6 +533,15 @@ def main():
             "epochs_without_improvement", 0
         )
         start_epoch = checkpoint["epoch"] + 1
+        if adaptive:
+            import random
+            rng = checkpoint["rng_state"]
+            random.setstate(rng["python"])
+            np.random.set_state(rng["numpy"])
+            torch.set_rng_state(rng["torch"].cpu())
+            torch.cuda.set_rng_state_all([state.cpu() for state in rng["cuda"]])
+            train_loader.generator.set_state(checkpoint["train_loader_generator_state"].cpu())
+            adaptive_elapsed_seconds = checkpoint.get("adaptive_train_validation_seconds", 0.0)
         if epochs_without_improvement >= args.patience:
             print(
                 "Run already reached early stopping at epoch "
@@ -485,8 +553,11 @@ def main():
     print("Train distribution:", Counter(train_frame["label"]))
     print("Validation distribution:", Counter(val_frame["label"]))
     for epoch in range(start_epoch, args.epochs + 1):
+        epoch_started = time.monotonic()
         print(f"\nEpoch {epoch}/{args.epochs}")
-        if method_loss_weights is None:
+        if controller is not None:
+            train_metrics = controller.train_epoch(model, train_loader, optimizer, scaler, device, epoch)
+        elif method_loss_weights is None:
             train_metrics = train_one_epoch(
                 model, train_loader, criterion, optimizer, scaler, device,
                 persistent_progress=args.persistent_progress,
@@ -530,6 +601,15 @@ def main():
             epochs_without_improvement,
             config,
         )
+        if controller is not None:
+            import random
+            payload["adaptive_state"] = controller.state_dict()
+            payload["rng_state"] = {"python": random.getstate(), "numpy": np.random.get_state(),
+                "torch": torch.get_rng_state(), "cuda": torch.cuda.get_rng_state_all()}
+            payload["train_loader_generator_state"] = train_loader.generator.get_state()
+            adaptive_elapsed_seconds += time.monotonic() - epoch_started
+            payload["adaptive_train_validation_seconds"] = adaptive_elapsed_seconds
+            payload["ordinary_train_images_seen"] = epoch * len(train_frame)
         atomic_torch_save(payload, args.output_dir / "last.pt")
         if improved:
             atomic_torch_save(payload, args.output_dir / "best.pt")
