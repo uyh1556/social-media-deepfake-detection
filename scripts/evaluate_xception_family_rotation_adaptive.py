@@ -9,9 +9,9 @@ from prepare_family_rotation_adaptive_learning import ROOT, STRATEGIES, atomic_j
 from summarize_family_rotation_results import selection_scope, summarize_method_rows
 
 
-def validate_run(saved, manifest, roles, protocol, strategy):
+def validate_run(saved, manifest, roles, protocol, strategy, seed=42):
     adaptive = saved.get("adaptive_learning", {})
-    if (saved.get("manifest_sha256") != sha(manifest) or saved.get("seed") != 42
+    if (saved.get("manifest_sha256") != sha(manifest) or saved.get("seed") != seed
             or adaptive.get("strategy") != strategy or adaptive.get("protocol") != protocol
             or adaptive.get("validation_roles_sha256") != sha(roles)):
         raise RuntimeError("Adaptive checkpoint/manifest/validation-role identity differs")
@@ -44,7 +44,7 @@ def save_summary(output, rows, methods, identity):
     atomic_json(output / "evaluation_summary.json", {**identity, "completed_evaluations": len(rows),
         "expected_evaluations": len(identity["selections"]) * len(identity["strategies"]),
         "evaluation_role": "development; repeatedly inspected DF40 methods", "test_used_for_tuning": False})
-    lines = ["# Q95 M7 adaptive-learning pilot", "", "seed42. Same 39600 train images; same source-disjoint validation roles.",
+    lines = ["# Q95 M7 adaptive-learning pilot", "", f"seed{identity['training_seed']}. Same 39600 train images; same source-disjoint validation roles.",
         "Primary metric: selection-common unseen12 macro AUC. Real is the negative class, FF++ is separate.",
         "Extra temporary updates add computation; compare their logs before making a compute-budget claim.", "",
         "| Selection | Strategy | Unseen12 AUC | Real FPR | Seen6 AUC | FF++ AUC |",
@@ -64,6 +64,7 @@ def main():
     p.add_argument("--protocol-config", type=Path, default=ROOT / "configs/family_rotation_adaptive_learning_v1/protocol.json")
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--workers", type=int, default=2)
+    p.add_argument("--seed", type=int, choices=(42, 43, 44), default=42)
     p.add_argument("--check-only", action="store_true")
     p.add_argument("--reuse-evaluation-roots", nargs="*", type=Path, default=[],
                    help="Reuse matching completed inference from these directories")
@@ -77,6 +78,8 @@ def main():
         p.error("Invalid duplicate selections/strategies or loader settings")
     import pandas as pd
     cfg, protocol = [json.loads(path.read_text()) for path in (a.config, a.protocol_config)]
+    if protocol.get("training_seed") != a.seed:
+        p.error("--seed must match training_seed in --protocol-config")
     test = None
     if not a.wild_only:
         test = pd.concat([pd.read_csv(path, dtype=str, keep_default_na=False)
@@ -100,11 +103,11 @@ def main():
         roles = a.roles_root / selection.lower() / "validation_roles.csv"
         load_roles(manifest, roles, protocol)
         for strategy in a.strategies:
-            path = run_directory(a.runs_root, selection, strategy, 42) / "best.pt"
+            path = run_directory(a.runs_root, selection, strategy, a.seed) / "best.pt"
             if not path.is_file():
                 raise FileNotFoundError(path)
             saved = json.loads((path.parent / "config.json").read_text())
-            validate_run(saved, manifest, roles, protocol, strategy)
+            validate_run(saved, manifest, roles, protocol, strategy, a.seed)
             runs.append((selection, strategy, manifest, roles, path))
             print(f"Ready: {selection} / {strategy}", flush=True)
     if a.check_only:
@@ -127,13 +130,13 @@ def main():
             json.loads((ROOT / "configs/wilddeepfake_evaluation_v1/protocol.json").read_text()))
     rows, methods, wild_rows, compute_rows = [], [], [], []
     identity = {"protocol": protocol["protocol"], "selections": a.selections, "strategies": a.strategies,
-        "training_seed": 42, "jpeg_quality": 95, "test_groups": 21, "test_images": 42000,
+        "training_seed": a.seed, "jpeg_quality": 95, "test_groups": 21, "test_images": 42000,
         "decision_threshold": 0.5}
     for number, (selection, strategy, manifest, roles, path) in enumerate(runs, 1):
         print(f"\n===== [{number}/{len(runs)}] {selection} / {strategy} =====", flush=True)
         checkpoint = torch.load(path, map_location="cpu", weights_only=False)
         saved = checkpoint["config"]
-        validate_run(saved, manifest, roles, protocol, strategy)
+        validate_run(saved, manifest, roles, protocol, strategy, a.seed)
         if checkpoint.get("label_map") != {"real": 0, "fake": 1} or checkpoint.get("model_name") not in {"xception", "legacy_xception"}:
             raise RuntimeError("Unexpected checkpoint architecture or labels")
         checkpoint_hash = sha(path)
@@ -193,10 +196,10 @@ def main():
             selected, _ = selection_scope(cfg, selection)
             method_result = method_rows(selection, strategy, "M7", selected, test, metrics)
             for row in method_result:
-                row.update(strategy=strategy, training_seed=42, jpeg_quality=95)
+                row.update(strategy=strategy, training_seed=a.seed, jpeg_quality=95)
             summary = summarize_method_rows(method_result, cfg, selection)
             cm = metrics["confusion_matrix"]
-            rows.append({"selection": selection, "strategy": strategy, "training_seed": 42,
+            rows.append({"selection": selection, "strategy": strategy, "training_seed": a.seed,
                 "real_fpr": cm[0][1] / sum(cm[0]), **summary})
             methods.extend(method_result)
             save_summary(a.output_root, rows, methods, identity)
@@ -206,10 +209,10 @@ def main():
             loaders = build_loaders(wild, a.wild_data_root, saved["data_config"], a.batch_size, a.workers)
             info = {"path": str(path), "sha256": checkpoint_hash, "epoch": checkpoint["epoch"],
                     "best_validation_auc": checkpoint["best_val_auc"]}
-            frames, sequences = evaluate_one(strategy, "M7", 42, {"preprocessing": "native_letterbox299"},
+            frames, sequences = evaluate_one(strategy, "M7", a.seed, {"preprocessing": "native_letterbox299"},
                 checkpoint, info, loaders["native_letterbox299"], wild, a.wild_manifest,
                 a.output_root / "wilddeepfake" / selection.lower(), device)
-            row = summary_row(strategy, "M7", {"name": f"{selection.lower()}_{strategy}"}, 42,
+            row = summary_row(strategy, "M7", {"name": f"{selection.lower()}_{strategy}"}, a.seed,
                 "native_letterbox299", frames, sequences)
             row.update(selection=selection, strategy=strategy)
             wild_rows.append(row)

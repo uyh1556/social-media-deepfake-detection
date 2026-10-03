@@ -25,9 +25,11 @@ def main():
     a = p.parse_args()
     if len(set(a.selections)) != len(a.selections) or len(set(a.strategies)) != len(a.strategies):
         p.error("Selections and strategies must be unique")
-    if a.seed != 42 or a.epochs < 1 or a.batch_size < 1 or a.workers < 0 or a.patience < 1:
-        p.error("Pilot uses seed42 and positive training settings")
+    if a.seed not in (42, 43, 44) or a.epochs < 1 or a.batch_size < 1 or a.workers < 0 or a.patience < 1:
+        p.error("Pilot uses seed 42/43/44 and positive training settings")
     protocol = json.loads(a.protocol_config.read_text())
+    if protocol.get("training_seed") != a.seed:
+        p.error("--seed must match training_seed in --protocol-config")
     cfg = json.loads((ROOT / "configs/family_rotation_v1/selections.json").read_text())
     from train_xception_family_coverage import FIXED_BUDGETS, validate_manifest
     prepared = []
@@ -51,7 +53,7 @@ def main():
         for strategy in a.strategies:
             run = run_directory(a.output_root, selection, strategy, a.seed)
             last, best = run / "last.pt", run / "best.pt"
-            print(f"\n===== {selection} / {strategy} / fixed Q95 / seed42 =====", flush=True)
+            print(f"\n===== {selection} / {strategy} / fixed Q95 / seed{a.seed} =====", flush=True)
             if (run / "config.json").exists():
                 saved = json.loads((run / "config.json").read_text())
                 adaptive = saved.get("adaptive_learning", {})

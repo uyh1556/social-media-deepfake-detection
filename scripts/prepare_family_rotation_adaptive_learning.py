@@ -19,8 +19,8 @@ STRATEGIES = ("uniform", "difficulty", "complementarity")
 
 
 def validate_protocol(protocol):
-    if protocol.get("protocol") != "family_rotation_adaptive_learning_v1" or protocol.get("training_seed") != 42:
-        raise ValueError("Expected frozen seed42 adaptive pilot protocol")
+    if protocol.get("protocol") != "family_rotation_adaptive_learning_v1" or protocol.get("training_seed") not in (42, 43, 44):
+        raise ValueError("Expected adaptive pilot protocol with training seed 42, 43 or 44")
     if not 0 < protocol["meta_validation_fraction"] < 1 or not 0 < protocol["uniform_floor"] <= 1:
         raise ValueError("Invalid validation fraction or uniform floor")
     if not 0 <= protocol["ema_decay"] < 1 or protocol["maximum_method_weight"] < 1:
