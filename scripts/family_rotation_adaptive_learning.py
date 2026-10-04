@@ -91,13 +91,15 @@ class ProbeDataset(torch.utils.data.Dataset):
 
 
 class AdaptiveController:
-    def __init__(self, strategy, protocol, train, roles, root, transform, output, batch_size=32, workers=2):
+    def __init__(self, strategy, protocol, train, roles, root, transform, output, batch_size=32, workers=2,
+                 quiet=False, log_interval_seconds=60):
         self.strategy, self.protocol = strategy, protocol
         self.methods = sorted(train.loc[train.label == "fake", "method"].unique())
         if len(self.methods) != 6 or train.loc[train.label == "fake"].groupby("method").size().nunique() != 1:
             raise ValueError("Adaptive M7 requires six equally sized fake methods")
         self.train, self.root, self.transform, self.output = train, root, transform, output
         self.batch_size, self.workers = batch_size, workers
+        self.quiet, self.log_interval_seconds = quiet, log_interval_seconds
         meta = roles[roles.validation_role == "meta"]
         self.probe = pd.concat([ranked_subset(meta[meta.method == method],
             protocol["probe_real"] if method == "original" else protocol["probe_fake_per_method"],
@@ -145,7 +147,7 @@ class AdaptiveController:
     def losses(self, model, device, label):
         model.eval()
         losses = []
-        for images, targets in tqdm(self.loader(self.probe), desc=label, leave=False):
+        for images, targets in tqdm(self.loader(self.probe), desc=label, leave=False, disable=self.quiet):
             logits = model(images.to(device))
             loss = F.cross_entropy(logits.float(), targets.to(device), reduction="none")
             losses.extend(loss.cpu().tolist())
@@ -160,7 +162,10 @@ class AdaptiveController:
         if self.strategy == "uniform":
             return
         start = time.monotonic()
-        print(f"\nAdaptive refresh {self.refreshes + 1}: {self.strategy}, epoch position {fraction:.3f}", flush=True)
+        if not self.quiet:
+            print(f"\nAdaptive refresh {self.refreshes + 1}: {self.strategy}, epoch position {fraction:.3f}", flush=True)
+        else:
+            print(f"  Weight refresh {self.refreshes + 1} at epoch position {fraction:.2f}", flush=True)
         training_modes = {module: module.training for module in model.modules()}
         with preserve_rng():
             try:
@@ -183,7 +188,8 @@ class AdaptiveController:
                         "probe_real_ce": base["original"], **branches.get(method, {})})
                 self.refreshes += 1
                 atomic_csv(self.output / "adaptive_weight_history.csv", pd.DataFrame(self.log))
-                print("Loss weights:", {m: round(w, 3) for m, w in self.weights.items()}, flush=True)
+                if not self.quiet:
+                    print("Loss weights:", {m: round(w, 3) for m, w in self.weights.items()}, flush=True)
             finally:
                 for module, mode in training_modes.items():
                     module.training = mode
@@ -201,7 +207,8 @@ class AdaptiveController:
             part = ranked_subset(self.train[self.train.method == method],
                 p["update_real"] if method == "original" else p["update_fake_per_method"],
                 p["role_seed"], f"refresh{self.refreshes}/{method}")
-            gradients[method] = mean_gradient(model, self.loader(part, 8), device, f"Direction {method}")
+            gradients[method] = mean_gradient(model, self.loader(part, 8), device, f"Direction {method}",
+                                             progress_enabled=not self.quiet)
             self.extra_forward_images += len(part)
             self.extra_backward_images += len(part)
         real = gradients.pop("original")
@@ -253,7 +260,8 @@ class AdaptiveController:
     def train_epoch(self, model, loader, optimizer, scaler, device, epoch):
         model.train()
         total_loss = total_correct = total_samples = 0
-        progress = tqdm(loader, desc="Train", leave=True, dynamic_ncols=True)
+        progress = tqdm(loader, desc="Train", leave=True, dynamic_ncols=True, disable=self.quiet)
+        last_log = time.monotonic()
         for index, batch in enumerate(progress):
             fraction = epoch - 1 + index / len(loader)
             if self.strategy != "uniform" and fraction + 1e-12 >= self.next_fraction:
@@ -277,4 +285,8 @@ class AdaptiveController:
             total_correct += int((logits.argmax(1) == labels).sum())
             total_samples += size
             progress.set_postfix(loss=f"{float(loss.detach()):.4f}")
+            if self.quiet and time.monotonic() - last_log >= self.log_interval_seconds:
+                print(f"  Train {index + 1}/{len(loader)} ({(index + 1) / len(loader):.0%})"
+                      f" | loss={total_loss / total_samples:.4f} | refreshes={self.refreshes}", flush=True)
+                last_log = time.monotonic()
         return {"loss": total_loss / total_samples, "accuracy": total_correct / total_samples}

@@ -2,6 +2,7 @@ import argparse
 import csv
 import json
 import platform
+import time
 from pathlib import Path
 
 import numpy as np
@@ -109,6 +110,8 @@ def evaluate_with_predictions(
     *,
     progress_desc="Evaluate",
     persistent_progress=False,
+    progress_enabled=True,
+    log_interval_seconds=60,
 ):
     model.eval()
     use_amp = device.type == "cuda"
@@ -117,11 +120,13 @@ def evaluate_with_predictions(
     predictions = []
     probabilities = []
     indices = []
+    last_log = time.monotonic()
 
     for batch in tqdm(
         loader,
         desc=progress_desc,
         leave=persistent_progress,
+        disable=not progress_enabled,
     ):
         images = batch["image"].to(device, non_blocking=True)
         batch_labels = batch["label"].to(device, non_blocking=True)
@@ -139,6 +144,9 @@ def evaluate_with_predictions(
         predictions.extend(batch_predictions.cpu().tolist())
         probabilities.extend(batch_probabilities.float().cpu().tolist())
         indices.extend(batch["index"].tolist())
+        if not progress_enabled and time.monotonic() - last_log >= log_interval_seconds:
+            print(f"  {progress_desc}: {len(indices)}/{len(frame)} ({len(indices) / len(frame):.0%})", flush=True)
+            last_log = time.monotonic()
 
     if indices != list(range(len(frame))):
         raise RuntimeError("Evaluation order changed unexpectedly.")

@@ -72,6 +72,8 @@ def parse_args():
         default="xception_preprocessing_ablation_v1",
     )
     parser.add_argument("--condition-name", default=None)
+    parser.add_argument("--quiet", action="store_true", help="Epoch summaries and sparse progress; no batch/probe bars")
+    parser.add_argument("--log-interval-seconds", type=float, default=60)
     parser.add_argument(
         "--persistent-progress",
         action="store_true",
@@ -117,17 +119,19 @@ def parse_args():
     parser.add_argument("--adaptive-strategy", choices=["uniform", "difficulty", "complementarity"], default=None)
     parser.add_argument("--adaptive-protocol-config", type=Path, default=None)
     parser.add_argument("--adaptive-validation-roles", type=Path, default=None)
+    parser.add_argument("--adaptive-augmentation-config", type=Path, default=None)
     return parser.parse_args()
 
 
 def train_one_epoch_method_weighted(
     model, loader, class_weights, method_weights, optimizer, scaler, device,
-    *, persistent_progress=False,
+    *, persistent_progress=False, progress_enabled=True,
 ):
     from tqdm.auto import tqdm
     model.train()
     total_loss = total_correct = total_samples = 0
-    progress = tqdm(loader, desc="Train", leave=persistent_progress, dynamic_ncols=True)
+    progress = tqdm(loader, desc="Train", leave=persistent_progress, dynamic_ncols=True,
+                    disable=not progress_enabled)
     for batch in progress:
         images = batch["image"].to(device, non_blocking=True)
         labels = batch["label"].to(device, non_blocking=True)
@@ -224,11 +228,21 @@ def main():
         raise ValueError("Adaptive strategy requires both protocol config and validation roles")
     if not adaptive and (args.adaptive_protocol_config or args.adaptive_validation_roles):
         raise ValueError("Specify --adaptive-strategy with adaptive paths")
-    if adaptive and (args.canonical_size != 256 or args.jpeg_quality != 95 or args.jpeg_subsampling != 2
-                     or args.jpeg_optimize or args.jpeg_progressive or args.train_jpeg_qualities is not None
-                     or args.train_noise_probability != 0 or args.method_loss_weights_json is not None
-                     or args.unweighted_loss):
-        raise ValueError("Adaptive pilot requires standard fixed-Q95 M7 with no static weighting/noise")
+    if args.log_interval_seconds <= 0:
+        raise ValueError("log-interval-seconds must be positive")
+    augmentation = None
+    if args.adaptive_augmentation_config is not None:
+        if not adaptive:
+            raise ValueError("Adaptive augmentation requires an adaptive strategy")
+        from family_rotation_adaptive_augmentation import load_experiment, check_training_arguments
+        augmentation = check_training_arguments(args, load_experiment(args.adaptive_augmentation_config))
+    if adaptive:
+        if (args.canonical_size != 256 or args.jpeg_quality != 95 or args.jpeg_subsampling != 2
+                or args.jpeg_optimize or args.jpeg_progressive or args.method_loss_weights_json is not None
+                or args.unweighted_loss):
+            raise ValueError("Adaptive M7 requires canonical256/Q95/4:2:0 and no static loss weighting")
+        if augmentation is None and (args.train_jpeg_qualities is not None or args.train_noise_probability != 0):
+            raise ValueError("Mixed adaptive runs require --adaptive-augmentation-config")
     if args.model not in {"xception", "legacy_xception"}:
         raise ValueError("This ablation is restricted to Xception.")
     controlled_reencode = args.canonical_size is not None
@@ -483,18 +497,25 @@ def main():
             "meta_validation_images": int(adaptive_roles.validation_role.eq("meta").sum()),
             "checkpoint_validation_images": len(val_frame),
         }
+        if augmentation is not None:
+            config["adaptive_learning"].update({
+                "augmentation": augmentation,
+                "augmentation_config_sha256": sha256_file(args.adaptive_augmentation_config),
+                "probe_preprocessing": "fixed Q95, no noise, no flip",
+            })
         old_config = args.output_dir / "config.json"
         if old_config.exists():
             old = json.loads(old_config.read_text())
             for key in ("manifest_sha256", "seed", "adaptive_learning", "epochs", "batch_size",
-                        "learning_rate", "weight_decay", "patience", "min_delta", "workers"):
+                        "learning_rate", "weight_decay", "patience", "min_delta", "workers", "preprocessing"):
                 if json_ready(old.get(key)) != json_ready(config.get(key)):
                     raise RuntimeError(f"Adaptive resume configuration differs: {key}")
     if adaptive:
         from prepare_family_rotation_adaptive_learning import atomic_json
         atomic_json(args.output_dir / "config.json", json_ready(config))
         controller = AdaptiveController(args.adaptive_strategy, adaptive_protocol, train_frame,
-            adaptive_roles, args.data_root, val_transform, args.output_dir, workers=args.workers)
+            adaptive_roles, args.data_root, val_transform, args.output_dir, workers=args.workers,
+            quiet=args.quiet, log_interval_seconds=args.log_interval_seconds)
     else:
         write_json(args.output_dir / "config.json", config)
 
@@ -548,9 +569,13 @@ def main():
             )
             return
 
-    print(json.dumps(json_ready(config), ensure_ascii=False, indent=2))
-    print("Train distribution:", Counter(train_frame["label"]))
-    print("Validation distribution:", Counter(val_frame["label"]))
+    if not args.quiet:
+        print(json.dumps(json_ready(config), ensure_ascii=False, indent=2))
+        print("Train distribution:", Counter(train_frame["label"]))
+        print("Validation distribution:", Counter(val_frame["label"]))
+    else:
+        print(f"Train={len(train_frame)}, selection-val={len(val_frame)}, GPU={config['gpu']}"
+              f" | augmentation={augmentation or preprocessing_name} | validation=Q95/no-noise", flush=True)
     for epoch in range(start_epoch, args.epochs + 1):
         epoch_started = time.monotonic()
         print(f"\nEpoch {epoch}/{args.epochs}")
@@ -560,12 +585,14 @@ def main():
             train_metrics = train_one_epoch(
                 model, train_loader, criterion, optimizer, scaler, device,
                 persistent_progress=args.persistent_progress,
+                progress_enabled=not args.quiet,
             )
         else:
             train_metrics = train_one_epoch_method_weighted(
                 model, train_loader, weight_tensor, method_loss_weights,
                 optimizer, scaler, device,
                 persistent_progress=args.persistent_progress,
+                progress_enabled=not args.quiet,
             )
         val_metrics = evaluate(
             model,
@@ -573,6 +600,7 @@ def main():
             criterion,
             device,
             persistent_progress=args.persistent_progress,
+            progress_enabled=not args.quiet,
         )
         learning_rate = optimizer.param_groups[0]["lr"]
         epoch_result = {
@@ -614,21 +642,27 @@ def main():
             atomic_torch_save(payload, args.output_dir / "best.pt")
         write_json(args.output_dir / "history.json", history)
         write_history_csv(args.output_dir / "history.csv", history)
-        print(
-            f"Train loss={train_metrics['loss']:.4f}, "
-            f"accuracy={train_metrics['accuracy']:.4f}"
-        )
-        print(
-            f"Val loss={val_metrics['loss']:.4f}, "
-            f"accuracy={val_metrics['accuracy']:.4f}, "
-            f"F1={val_metrics['f1']:.4f}, "
-            f"AUC={val_metrics['roc_auc']:.4f}"
-        )
-        print("Confusion matrix:", val_metrics["confusion_matrix"])
-        print(
-            "Early stopping: "
-            f"{epochs_without_improvement}/{args.patience}"
-        )
+        if args.quiet:
+            print(f"Epoch {epoch}/{args.epochs} complete | train loss={train_metrics['loss']:.4f}"
+                  f" | val AUC={val_metrics['roc_auc']:.6f} | val F1={val_metrics['f1']:.4f}"
+                  f" | early-stop={epochs_without_improvement}/{args.patience}"
+                  f" | {time.monotonic() - epoch_started:.0f}s", flush=True)
+        else:
+            print(
+                f"Train loss={train_metrics['loss']:.4f}, "
+                f"accuracy={train_metrics['accuracy']:.4f}"
+            )
+            print(
+                f"Val loss={val_metrics['loss']:.4f}, "
+                f"accuracy={val_metrics['accuracy']:.4f}, "
+                f"F1={val_metrics['f1']:.4f}, "
+                f"AUC={val_metrics['roc_auc']:.4f}"
+            )
+            print("Confusion matrix:", val_metrics["confusion_matrix"])
+            print(
+                "Early stopping: "
+                f"{epochs_without_improvement}/{args.patience}"
+            )
         if epochs_without_improvement >= args.patience:
             print(f"Early stopping at epoch {epoch}.")
             break

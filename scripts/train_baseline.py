@@ -353,6 +353,7 @@ def train_one_epoch(
     device,
     *,
     persistent_progress=False,
+    progress_enabled=True,
 ):
     model.train()
     use_amp = device.type == "cuda"
@@ -366,6 +367,7 @@ def train_one_epoch(
         leave=persistent_progress,
         dynamic_ncols=True,
         mininterval=0.5,
+        disable=not progress_enabled,
     )
     for batch in progress:
         images = batch["image"].to(device, non_blocking=True)
@@ -404,6 +406,7 @@ def evaluate(
     device,
     *,
     persistent_progress=False,
+    progress_enabled=True,
 ):
     model.eval()
     use_amp = device.type == "cuda"
@@ -420,6 +423,7 @@ def evaluate(
         leave=persistent_progress,
         dynamic_ncols=True,
         mininterval=0.5,
+        disable=not progress_enabled,
     )
     for batch in progress:
         images = batch["image"].to(device, non_blocking=True)

@@ -310,14 +310,14 @@ def score_metrics(frame, scores, losses, methods, threshold):
     return result
 
 
-def mean_gradient(model, loader, device, description):
+def mean_gradient(model, loader, device, description, *, progress_enabled=True):
     import torch
     from tqdm.auto import tqdm
 
     model.eval()
     model.zero_grad(set_to_none=True)
     total = len(loader.dataset)
-    for images, labels in tqdm(loader, desc=description, leave=False):
+    for images, labels in tqdm(loader, desc=description, leave=False, disable=not progress_enabled):
         logits = model(images.to(device, non_blocking=True))
         loss = torch.nn.functional.cross_entropy(logits, labels.to(device), reduction="sum") / total
         loss.backward()

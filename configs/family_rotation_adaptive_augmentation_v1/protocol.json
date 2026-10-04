@@ -1,0 +1,32 @@
+{
+  "experiment": "family_rotation_adaptive_augmentation_v1",
+  "adaptive_protocol_config": "configs/family_rotation_adaptive_learning_v1/protocol.json",
+  "training_seed": 42,
+  "strategies": ["uniform", "complementarity"],
+  "augmentations": ["mixed_jpeg", "mixed_jpeg_noise"],
+  "train_jpeg_qualities": [75, 80, 85, 90, 95],
+  "noise_probability": 0.25,
+  "noise_max_std": 5.0,
+  "noise_units": "RGB uint8 0-255",
+  "noise_position": "after Letterbox256, before JPEG",
+  "validation_jpeg_quality": 95,
+  "validation_noise_std": 0,
+  "adaptive_probe_preprocessing": "fixed Q95, no noise, no flip; original adaptive rule",
+  "unique_train_images": 39600,
+  "evaluation_noise_seed": 20261005,
+  "evaluation_conditions": [
+    {"name": "q95", "jpeg_quality": 95, "noise_std": 0},
+    {"name": "q90", "jpeg_quality": 90, "noise_std": 0},
+    {"name": "q75", "jpeg_quality": 75, "noise_std": 0},
+    {"name": "q60", "jpeg_quality": 60, "noise_std": 0},
+    {"name": "q50", "jpeg_quality": 50, "noise_std": 0},
+    {"name": "q95_noise2", "jpeg_quality": 95, "noise_std": 2},
+    {"name": "q95_noise5", "jpeg_quality": 95, "noise_std": 5},
+    {"name": "q95_noise10", "jpeg_quality": 95, "noise_std": 10}
+  ],
+  "evaluation_scope": "same 21x2000 test images; selection-common DF40 unseen12; Real FPR and FF++ separately",
+  "test_role": "development evaluation; no test threshold tuning",
+  "test_noise_pairing": "same deterministic sample-specific Gaussian field scaled across strengths, shared by all models",
+  "checkpoint_selection": "unchanged source-disjoint selection-validation ROC-AUC at Q95",
+  "compute_budget": "unique image budget matched; complementarity adds recorded probe computation"
+}
